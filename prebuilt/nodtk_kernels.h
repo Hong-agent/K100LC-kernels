@@ -1708,6 +1708,18 @@ static const RtArg k_args_91[] = {
     {16u, 4u, 0},   // by_value/global
     {20u, 4u, 0},   // by_value/global
 };
+static const RtArg k_args_92[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
+};
+static const RtArg k_args_93[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
+};
 
 static const RtKernel k_table[] = {
     {"_Z10nvfp4_gemvILi1ELi1EEvPKjPKhPKaS5_PKfPfiif", "nvfp4_gemv<1,1>", 22u, k_args_0, 320u, 1024u, 0u},
@@ -1802,5 +1814,7 @@ static const RtKernel k_table[] = {
     {"iq4nl_to_i8_k", "iq4nl_to_i8_k", 5u, k_args_89, 32u, 0u, 0u},
     {"iq4xs_dequant_k", "iq4xs_dequant_k", 4u, k_args_90, 24u, 0u, 0u},
     {"q2_0_dequant_k", "q2_0_dequant_k", 4u, k_args_91, 24u, 0u, 0u},
+    {"q4_0_dequant_k", "q4_0_dequant_k", 4u, k_args_92, 24u, 0u, 0u},
+    {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_93, 24u, 0u, 0u},
 };
-static const int k_table_n = 92;
+static const int k_table_n = 94;

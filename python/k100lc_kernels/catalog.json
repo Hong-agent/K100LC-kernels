@@ -8388,6 +8388,64 @@
    "kernarg_size": 24,
    "group_segment": 0,
    "private_segment": 0
+  },
+  {
+   "name": "q4_0_dequant_k",
+   "lookup": "q4_0_dequant_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 20,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 24,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "q8_0_dequant_k",
+   "lookup": "q8_0_dequant_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 20,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 24,
+   "group_segment": 0,
+   "private_segment": 0
   }
  ]
 }
