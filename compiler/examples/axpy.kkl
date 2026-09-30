@@ -1,0 +1,4 @@
+def axpy(a: ptr[f32], x: ptr[f32], y: ptr[f32], n: u32, alpha: f32):
+    i = gid()
+    if i < n:
+        y[i] = fma(alpha, x[i], y[i])

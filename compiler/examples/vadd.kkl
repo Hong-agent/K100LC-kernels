@@ -1,0 +1,4 @@
+def vadd(a: ptr[f32], b: ptr[f32], out: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        out[i] = a[i] + b[i]

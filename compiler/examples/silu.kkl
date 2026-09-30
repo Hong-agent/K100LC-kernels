@@ -1,0 +1,5 @@
+def silu(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        v = x[i]
+        y[i] = v / (1.0 + exp(-v))

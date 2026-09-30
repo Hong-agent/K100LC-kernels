@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""把本项目新增的原生内核打成一个 `build/flashmoe.hsaco`。
+
+    python3 tools/build_flashmoe.py
+
+只包含「专家原生解码 + 通用 GEMV」这批新内核；FASTASM 的 81 个基线内核
+另有自己的 HSACO（之后按需合并）。
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
+
+import asm  # noqa: E402
+from kernel_lab import _max_registers  # noqa: E402
+
+import gen_gemv_f32  # noqa: E402
+import gen_gemv_f32_warp  # noqa: E402
+import gen_gemv_i8  # noqa: E402
+import gen_iq2s_dequant  # noqa: E402
+import gen_iq3s_dequant  # noqa: E402
+import gen_iq3xxs_dequant  # noqa: E402
+import gen_iq4nl_dequant  # noqa: E402
+import gen_iq4nl_to_i8  # noqa: E402
+import gen_iq4xs_dequant  # noqa: E402
+import gen_q2_0_dequant  # noqa: E402
+
+MODULES = [
+    gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_i8, gen_iq4nl_dequant, gen_iq4nl_to_i8,
+    gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
+    gen_iq2s_dequant, gen_iq3s_dequant,
+]
+
+
+def main() -> int:
+    out = ROOT / "build" / "flashmoe_kernels"
+    out.mkdir(parents=True, exist_ok=True)
+    spec = []
+    for mod in MODULES:
+        name, asm_text, args, ksize = mod.NAME, mod.gen_asm(), mod.ARGS, mod.KERNARG_SIZE
+        src = out / f"{name}.s"
+        src.write_text(asm_text, encoding="utf-8")
+        code, _ins, _lbl = asm.assemble(src)
+        (out / f"{name}.bin").write_bytes(code)
+        ngpr, vgpr = _max_registers(asm_text)
+        spec.append({
+            "name": name,
+            "code": str(out / f"{name}.bin"),
+            "args": args,
+            "kernarg_size": ksize,
+            "kernarg_align": 8,
+            "sgpr_count": max(ngpr, 4),
+            "vgpr_count": max(vgpr, 1),
+            # warp-per-row GEMV 用 LDS 做归约（64 lane × 4B）
+            "group_segment": 1024 if name == "gemv_f32_warp_k" else 0,
+            "private_segment": 0,
+        })
+        print(f"  {name:22s} code={len(code):6d}B vgpr={max(vgpr, 1):3d} sgpr={max(ngpr, 4):2d}")
+    spec_path = out / "flashmoe.spec.json"
+    spec_path.write_text(json.dumps(spec, indent=1), encoding="utf-8")
+    hsaco = ROOT / "build" / "flashmoe.hsaco"
+    subprocess.run([sys.executable, str(ROOT / "tools/make_hsaco_multi.py"),
+                    str(spec_path), str(hsaco)], check=True, capture_output=True)
+    print(f"-> {hsaco}（{hsaco.stat().st_size} 字节，{len(spec)} 个内核）")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
