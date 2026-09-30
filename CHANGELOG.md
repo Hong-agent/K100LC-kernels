@@ -18,3 +18,4 @@
   `vadd/silu/axpy/loop` 已与 numpy 对账。
 - 新增动态内核启动 `fm_launch_dyn` / `Runtime.launch_dyn`：运行时遍历
   HSACO 符号表，用 catalog 参数布局启动；编译器产物无需重建 libfm_engine。
+- 新增 `gelu_mul_k`（GELU tanh 近似 × up）通用 FFN 内核；内核总数 92。

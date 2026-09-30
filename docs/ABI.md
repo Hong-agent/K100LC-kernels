@@ -57,6 +57,7 @@ Runtime.launch2d(name, gx, gy, wx, wy, argv)
 | `iq4nl_to_i8_k` | IQ4_NL → int8 + scale | `(w,out,scale,nblocks,64)` |
 | `fill_k` | 填充 f32 | `(y,value,n)` |
 | `silu_mul_k` | `y=silu(a)*b` | `(y,a,b,n)` |
+| `gelu_mul_k` | `y=gelu(a)*b`（tanh 近似） | `(y,a,b,n,64)` |
 | `sigmoid_mul_k` | `y=x*sigmoid(g)` | `(y,x,g,n)` |
 | `l2norm_k` | 每 S 维 L2 归一化 | `(x,S,eps)`，grid=rows |
 | `rmsnorm_gated_k` | RMSNorm + sigmoid 门 | `(y,x,w,g,D,eps)`，grid=rows |

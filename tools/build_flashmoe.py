@@ -24,6 +24,7 @@ from kernel_lab import _max_registers  # noqa: E402
 import gen_gemv_f32  # noqa: E402
 import gen_gemv_f32_warp  # noqa: E402
 import gen_gemv_i8  # noqa: E402
+import gen_gelu_mul  # noqa: E402
 import gen_iq2s_dequant  # noqa: E402
 import gen_iq3s_dequant  # noqa: E402
 import gen_iq3xxs_dequant  # noqa: E402
@@ -35,7 +36,7 @@ import gen_q2_0_dequant  # noqa: E402
 MODULES = [
     gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_i8, gen_iq4nl_dequant, gen_iq4nl_to_i8,
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
-    gen_iq2s_dequant, gen_iq3s_dequant,
+    gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
 ]
 
 
