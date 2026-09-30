@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace {
 
@@ -91,6 +92,36 @@ int fm_launch2d(const char* kernel, uint32_t gx, uint32_t gy,
         memcpy(kernarg + k->args[i].off, &argv[i], sz);
     }
     hsart_dispatch(k, dim3(gx, gy), dim3(wx, wy), 0, kernarg, k->kernarg_size);
+    return 0;
+}
+
+int fm_launch_dyn(const char* kernel, uint32_t gx, uint32_t gy,
+                  uint32_t wx, uint32_t wy,
+                  const uint32_t* layout, uint32_t nargs,
+                  uint32_t group_size, uint32_t private_size,
+                  uint32_t kernarg_size, const uint64_t* argv, int nargv) {
+    if (kernarg_size > MAX_KERNARG) return -3;
+    std::vector<RtArg> args(nargs);
+    int explicit_n = 0;
+    for (uint32_t i = 0; i < nargs; i++) {
+        args[i].off = layout[3 * i + 0];
+        args[i].size = layout[3 * i + 1];
+        args[i].kind = (uint8_t)layout[3 * i + 2];
+        if (args[i].kind == 0) explicit_n++;
+    }
+    if (explicit_n != nargv) return -2;
+    char kernarg[MAX_KERNARG];
+    memset(kernarg, 0, kernarg_size);
+    int ai = 0;
+    for (uint32_t i = 0; i < nargs; i++) {
+        if (args[i].kind != 0) continue;
+        size_t sz = args[i].size;
+        if (sz > 8) sz = 8;
+        memcpy(kernarg + args[i].off, &argv[ai++], sz);
+    }
+    hsart_dispatch_dyn(kernel, dim3(gx, gy), dim3(wx, wy), 0,
+                       kernarg, kernarg_size, args.data(), nargs,
+                       group_size, private_size);
     return 0;
 }
 

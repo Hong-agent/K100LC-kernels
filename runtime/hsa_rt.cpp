@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <unordered_map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -51,6 +52,8 @@ hsa_status_t g_host_pool_st = HSA_STATUS_ERROR;
 hsa_queue_t* g_queue = nullptr;
 hsa_executable_t g_exec{};
 uint64_t g_kobj[k_table_n];
+std::unordered_map<std::string, uint64_t> g_dyn_kobj;
+std::unordered_map<std::string, uint64_t> g_sym_kobj;
 
 void*     g_karg[N_SLOT];
 hsa_signal_t g_sig[N_SLOT];
@@ -162,6 +165,30 @@ hsa_status_t get_symbol(const char* name, hsa_agent_t agent, hsa_executable_symb
     return hsa_executable_get_symbol_by_name(g_exec, alt.c_str(), &agent, out);
 }
 
+hsa_status_t cb_symbol(hsa_executable_t, hsa_executable_symbol_t sym, void*) {
+    hsa_symbol_kind_t kind{};
+    if (hsa_executable_symbol_get_info(sym, HSA_EXECUTABLE_SYMBOL_INFO_TYPE, &kind)
+        != HSA_STATUS_SUCCESS || kind != HSA_SYMBOL_KIND_KERNEL) {
+        return HSA_STATUS_SUCCESS;
+    }
+    uint32_t len = 0;
+    if (hsa_executable_symbol_get_info(sym, HSA_EXECUTABLE_SYMBOL_INFO_NAME_LENGTH, &len)
+        != HSA_STATUS_SUCCESS) {
+        return HSA_STATUS_SUCCESS;
+    }
+    std::string name(len ? len - 1 : 0, '\0');
+    if (len && hsa_executable_symbol_get_info(
+            sym, HSA_EXECUTABLE_SYMBOL_INFO_NAME, name.data()) != HSA_STATUS_SUCCESS) {
+        return HSA_STATUS_SUCCESS;
+    }
+    uint64_t obj = 0;
+    if (hsa_executable_symbol_get_info(sym, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_OBJECT, &obj)
+        == HSA_STATUS_SUCCESS) {
+        g_sym_kobj[name] = obj;
+    }
+    return HSA_STATUS_SUCCESS;
+}
+
 void load_hsaco(const char* path) {
     static std::string alt_path;              // 命中备选路径时给它一个长生命周期
     FILE* f = fopen(path, "rb");
@@ -197,14 +224,26 @@ void load_hsaco(const char* path) {
     check_hsa(hsa_executable_load_agent_code_object(g_exec, g_gpu, reader, nullptr, nullptr),
               "load_agent_code_object");
     check_hsa(hsa_executable_freeze(g_exec, nullptr), "executable_freeze");
+    g_sym_kobj.clear();
+    HSA_CHECK(hsa_executable_iterate_symbols(g_exec, cb_symbol, nullptr));
+    if (getenv("RT_HSART_DEBUG")) {
+        fprintf(stderr, "hsa_rt: symbols:");
+        for (const auto& kv : g_sym_kobj) fprintf(stderr, " %s", kv.first.c_str());
+        fprintf(stderr, "\n");
+    }
+    int resolved = 0;
     for (int i = 0; i < k_table_n; i++) {
         hsa_executable_symbol_t sym;
-        HSA_CHECK(get_symbol(k_table[i].name, g_gpu, &sym));
+        if (get_symbol(k_table[i].name, g_gpu, &sym) != HSA_STATUS_SUCCESS) {
+            g_kobj[i] = 0;          // HSACO 里没有这个编译期内核：动态路径仍可用
+            continue;
+        }
         HSA_CHECK(hsa_executable_symbol_get_info(
             sym, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_OBJECT, &g_kobj[i]));
+        resolved++;
     }
-    fprintf(stderr, "hsa_rt: 自研 HSACO %s 已加载（%d 个 kernel，只依赖 /opt/hyhal）\n",
-            path, k_table_n);
+    fprintf(stderr, "hsa_rt: 自研 HSACO %s 已加载（编译期内核 %d/%d，动态内核走 lookup）\n",
+            path, resolved, k_table_n);
 }
 
 void make_queue() {
@@ -308,8 +347,36 @@ const RtKernel* hsart_lookup(const char* name) {
 }
 
 // ============================ 内核投递 ============================
-void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
-                    const void* kernarg, size_t kernarg_size) {
+static uint64_t dynamic_kobject(const char* name) {
+    auto it = g_dyn_kobj.find(name);
+    if (it != g_dyn_kobj.end()) return it->second;
+    auto sit = g_sym_kobj.find(name);
+    if (sit != g_sym_kobj.end()) {
+        g_dyn_kobj[name] = sit->second;
+        return sit->second;
+    }
+    std::string kname = std::string(name) + ".k";
+    auto kit = g_sym_kobj.find(kname);
+    if (kit != g_sym_kobj.end()) {
+        g_dyn_kobj[name] = kit->second;
+        return kit->second;
+    }
+    hsa_executable_symbol_t sym;
+    HSA_CHECK(get_symbol(name, g_gpu, &sym));
+    uint64_t obj = 0;
+    HSA_CHECK(hsa_executable_symbol_get_info(sym, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_OBJECT, &obj));
+    g_dyn_kobj[name] = obj;
+    return obj;
+}
+
+static void dispatch_packet(uint64_t kobj, const char* dbg_name, dim3 grid, dim3 block,
+                            int smem, const void* kernarg, size_t kernarg_size,
+                            const RtArg* args, uint32_t nargs,
+                            uint32_t group_size, uint32_t private_size) {
+    if (!kobj) {
+        fprintf(stderr, "hsa_rt: HSACO 里没有内核 %s\n", dbg_name);
+        return;
+    }
     std::lock_guard<std::mutex> lk(g_mtx);
     const int slot = g_next;
     if (g_slot_used[slot])
@@ -318,17 +385,16 @@ void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
     char* ka = (char*)g_karg[slot];
     memcpy(ka, kernarg, kernarg_size);
 
-    // 隐藏参数
     const uint64_t gx = (uint64_t)grid.x * block.x, gy = (uint64_t)grid.y * block.y,
                    gz = (uint64_t)grid.z * block.z;
     const uint32_t nbx = (uint32_t)((gx + block.x - 1) / block.x);
     const uint32_t nby = (uint32_t)((gy + block.y - 1) / block.y);
     const uint32_t nbz = (uint32_t)((gz + block.z - 1) / block.z);
     int dims = gz > 1 ? 3 : (gy > 1 ? 2 : 1);
-    for (uint32_t i = 0; i < k->nargs; i++) {
-        const RtArg& a = k->args[i];
+    for (uint32_t i = 0; i < nargs; i++) {
+        const RtArg& a = args[i];
         if (a.kind == 0) continue;
-        uint64_t v = 0, w = 0;
+        uint64_t v = 0;
         switch (a.kind) {
             case 1: v = nbx; break;
             case 2: v = nby; break;
@@ -336,23 +402,20 @@ void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
             case 4: v = block.x; break;
             case 5: v = block.y; break;
             case 6: v = block.z; break;
-            case 7: case 8: case 9: v = 0; break;      // remainder
-            case 10: case 11: case 12: v = 0; break;   // global offset
+            case 7: case 8: case 9: v = 0; break;
+            case 10: case 11: case 12: v = 0; break;
             case 13: v = (uint64_t)dims; break;
             default: v = 0; break;
         }
         if (a.size == 2) { uint16_t t = (uint16_t)v; memcpy(ka + a.off, &t, 2); }
         else if (a.size == 4) { uint32_t t = (uint32_t)v; memcpy(ka + a.off, &t, 4); }
         else { memcpy(ka + a.off, &v, 8); }
-        (void)w;
     }
 
     hsa_kernel_dispatch_packet_t* pkt = (hsa_kernel_dispatch_packet_t*)(
         (char*)g_queue->base_address +
         (hsa_queue_load_write_index_relaxed(g_queue) % g_queue->size) * sizeof(*pkt));
     memset(pkt, 0, sizeof(*pkt));
-    // setup 的低 2 位是 grid 维度数（1/2/3），不是「已初始化」标志。
-    // 写死 1 会让运行时合法地忽略 grid_size_y/z（workgroup_id_y/z 恒为 0）。
     pkt->setup = (uint16_t)dims;
     pkt->workgroup_size_x = (uint16_t)block.x;
     pkt->workgroup_size_y = (uint16_t)block.y;
@@ -360,9 +423,9 @@ void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
     pkt->grid_size_x = gx;
     pkt->grid_size_y = gy;
     pkt->grid_size_z = gz;
-    pkt->private_segment_size = k->private_size;
-    pkt->group_segment_size = k->group_size + (uint32_t)smem;
-    pkt->kernel_object = g_kobj[k - k_table];
+    pkt->private_segment_size = private_size;
+    pkt->group_segment_size = group_size + (uint32_t)smem;
+    pkt->kernel_object = kobj;
     pkt->kernarg_address = ka;
     hsa_signal_store_screlease(g_sig[slot], 1);
     pkt->completion_signal = g_sig[slot];
@@ -374,16 +437,29 @@ void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
     if (dbg)
         fprintf(stderr, "hsa_rt: %-28s grid=(%u,%u,%u) wg=(%u,%u,%u) kernarg=%p kobj=%llu "
                         "group=%u(+%d) priv=%u ksize=%zu\n",
-                k->lookup, (unsigned)gx, (unsigned)gy, (unsigned)gz,
+                dbg_name, (unsigned)gx, (unsigned)gy, (unsigned)gz,
                 (unsigned)block.x, (unsigned)block.y, (unsigned)block.z, (void*)ka,
-                (unsigned long long)g_kobj[k - k_table], k->group_size, smem,
-                k->private_size, kernarg_size);
+                (unsigned long long)kobj, group_size, smem, private_size, kernarg_size);
     __atomic_store_n(&pkt->header, header, __ATOMIC_RELEASE);
     const uint64_t index = hsa_queue_load_write_index_relaxed(g_queue);
     hsa_queue_store_write_index_screlease(g_queue, index + 1);
     hsa_signal_store_screlease(g_queue->doorbell_signal, index);
     g_slot_used[slot] = true;
     g_next = (g_next + 1) % N_SLOT;
+}
+
+void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
+                    const void* kernarg, size_t kernarg_size) {
+    dispatch_packet(g_kobj[k - k_table], k->lookup, grid, block, smem, kernarg, kernarg_size,
+                    k->args, k->nargs, k->group_size, k->private_size);
+}
+
+void hsart_dispatch_dyn(const char* name, dim3 grid, dim3 block, int smem,
+                        const void* kernarg, size_t kernarg_size,
+                        const RtArg* args, uint32_t nargs,
+                        uint32_t group_size, uint32_t private_size) {
+    dispatch_packet(dynamic_kobject(name), name, grid, block, smem, kernarg, kernarg_size,
+                    args, nargs, group_size, private_size);
 }
 
 // ============================ HIP API ============================

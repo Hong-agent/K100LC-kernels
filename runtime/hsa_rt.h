@@ -71,6 +71,11 @@ const char* hipGetErrorString(hipError_t e);
 // 把一包 kernarg 投递给指定内核（实现在 hsa_rt.cpp）
 void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
                     const void* kernarg, size_t kernarg_size);
+// 动态内核：HSACO 里的任意符号名；args 是完整参数布局（含 hidden_*）。
+void hsart_dispatch_dyn(const char* name, dim3 grid, dim3 block, int smem,
+                        const void* kernarg, size_t kernarg_size,
+                        const RtArg* args, uint32_t nargs,
+                        uint32_t group_size, uint32_t private_size);
 void hsart_init(const char* hsaco_path);        // 幂等；默认读 $RT_HSACO
 
 // ============================ 内核启动 ============================

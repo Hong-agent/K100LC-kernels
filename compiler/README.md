@@ -14,6 +14,8 @@ python3 -m k100lc_compiler list compiler/examples/vadd.kkl
 python3 -m k100lc_compiler build compiler/examples/silu.kkl \
     -o /tmp/kbuild --emit-asm
 python3 compiler/tests/test_examples.py
+python3 compiler/examples/run_vadd.py     # 动态 Runtime 启动编译产物
+python3 compiler/tests/test_dynamic.py
 ```
 
 ## DSL 子集
@@ -38,6 +40,9 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
 
 编译出的内核使用标准隐藏 kernarg（`hidden_block_count_x`、
 `hidden_group_size_x`…），所以 `gid()` 可用于跨 workgroup。
+
+编译会同时生成 `<name>.catalog.json`；用 `Runtime(hsaco=..., catalog=...)`
+加 `launch_dyn(...)` 即可直接启动，不必重建 `libfm_engine.so`。
 
 ## 后端已知规则
 

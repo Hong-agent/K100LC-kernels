@@ -37,6 +37,10 @@ Runtime.launch2d(name, gx, gy, wx, wy, argv)
 内核侧拿到的是 `v0 = threadIdx.x`、`s6 = blockIdx.x`、`blockIdx.y`。
 `hsa_job.run_one(grid=...)` 的 `grid` 是**总 work-item 数**，两者不要混。
 
+动态路径 `Runtime.launch_dyn` / `fm_launch_dyn` 接受完整参数布局
+`(off, size, kind)`（含 `hidden_*`），由 HSACO 旁边的 `catalog.json` 提供。
+它允许直接启动编译器新生成的内核，不必重建 `libfm_engine.so`。
+
 ## 4. 常用内核速查
 
 | lookup | 作用 | 显式参数 |
@@ -68,6 +72,17 @@ Runtime.launch2d(name, gx, gy, wx, wy, argv)
 2. `bash tools/build_all.sh`。
 3. 用 `python3 tools/gen_xxx.py` 或 `tools/kernel_lab.py` 做 bit-exact 对账。
 4. 更新 `CHANGELOG.md`。
+
+### 5.1 动态内核（推荐）
+
+```python
+rt = Runtime(hsaco="build/foo.hsaco", catalog="build/foo.catalog.json")
+rt.launch_dyn("foo", grid_x, 1, workgroup_x, 1, [a, b, out, n])
+```
+
+`hsart_dispatch_dyn` 在运行时遍历 HSACO 符号表找 kernel object，并按 catalog
+里的参数布局填 `kernarg` 与 hidden 参数。当前一个进程只加载一个 HSACO；
+多个 HSACO 先用 `tools/merge_hsacos.py` 合并。
 
 ## 6. 从其他项目更新
 

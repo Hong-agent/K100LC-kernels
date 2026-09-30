@@ -686,6 +686,12 @@ def compile_source(source: str, out_dir: pathlib.Path, only: str | None = None) 
         elf = build_elf([kernel])
         h_path = out_dir / f"{fn.name}.hsaco"
         h_path.write_bytes(elf)
+        import json as _json
+        (out_dir / f"{fn.name}.catalog.json").write_text(_json.dumps(
+            {"version": 1, "kernels": [{
+                "name": fn.name, "lookup": fn.name, "args": args,
+                "kernarg_size": ksize, "group_segment": 0, "private_segment": 0}]},
+            ensure_ascii=False, indent=1), encoding="utf-8")
         outputs.append(h_path)
     return outputs
 

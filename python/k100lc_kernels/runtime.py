@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import pathlib
 import struct
 
@@ -9,6 +10,15 @@ import numpy as np
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_HSACO = ROOT / "prebuilt" / "k100lc_kernels.hsaco"
 DEFAULT_LIB = ROOT / "prebuilt" / "libfm_engine.so"
+
+KINDS = {
+    "by_value": 0, "global_buffer": 0,
+    "hidden_block_count_x": 1, "hidden_block_count_y": 2, "hidden_block_count_z": 3,
+    "hidden_group_size_x": 4, "hidden_group_size_y": 5, "hidden_group_size_z": 6,
+    "hidden_remainder_x": 7, "hidden_remainder_y": 8, "hidden_remainder_z": 9,
+    "hidden_global_offset_x": 10, "hidden_global_offset_y": 11, "hidden_global_offset_z": 12,
+    "hidden_grid_dims": 13,
+}
 
 
 def _pack(v) -> int:
@@ -20,7 +30,7 @@ def _pack(v) -> int:
 class Runtime:
     """常驻 HSA 引擎：显存缓冲只分配一次，反复 launch。"""
 
-    def __init__(self, hsaco=DEFAULT_HSACO, lib=DEFAULT_LIB):
+    def __init__(self, hsaco=DEFAULT_HSACO, lib=DEFAULT_LIB, catalog=None):
         lib = ctypes.CDLL(str(lib))
         self._lib = lib
         lib.fm_init.restype = ctypes.c_int
@@ -44,8 +54,29 @@ class Runtime:
         lib.fm_launch2d.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_uint32,
                                     ctypes.c_uint32, ctypes.c_uint32,
                                     ctypes.POINTER(ctypes.c_uint64), ctypes.c_int]
+        lib.fm_launch_dyn.restype = ctypes.c_int
+        lib.fm_launch_dyn.argtypes = [
+            ctypes.c_char_p, ctypes.c_uint32, ctypes.c_uint32,
+            ctypes.c_uint32, ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32,
+            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint64), ctypes.c_int]
         if lib.fm_init(str(hsaco).encode()) != 0:
             raise RuntimeError(f"fm_init 失败: {hsaco}")
+        self.hsaco = pathlib.Path(hsaco)
+        self.catalog = self._load_catalog(catalog)
+
+    def _load_catalog(self, catalog):
+        if catalog is not None:
+            return json.loads(pathlib.Path(catalog).read_text(encoding="utf-8"))
+        for p in (self.hsaco.with_suffix(".catalog.json"),
+                  pathlib.Path(str(self.hsaco) + ".catalog.json")):
+            if p.is_file():
+                return json.loads(p.read_text(encoding="utf-8"))
+        if self.hsaco.resolve() == DEFAULT_HSACO.resolve():
+            return json.loads((ROOT / "python" / "k100lc_kernels" / "catalog.json")
+                              .read_text(encoding="utf-8"))
+        return {"kernels": []}
 
     def alloc(self, nbytes: int) -> int:
         p = self._lib.fm_alloc(nbytes)
@@ -91,6 +122,38 @@ class Runtime:
         a = (ctypes.c_uint64 * len(argv))(*[_pack(v) for v in argv])
         if self._lib.fm_launch2d(kernel.encode(), gx, gy, wx, wy, a, len(argv)) != 0:
             raise RuntimeError(f"fm_launch2d({kernel}) 失败")
+
+    def _find(self, kernel: str) -> dict:
+        for k in self.catalog.get("kernels", []):
+            if k.get("lookup") == kernel or k.get("name") == kernel:
+                return k
+        raise KeyError(f"catalog 里没有内核 {kernel}")
+
+    def launch_dyn(self, kernel: str, gx: int, gy: int, wx: int, wy: int, argv: list) -> None:
+        """用 HSACO 自带 metadata 动态启动（编译出的新内核走这条）。"""
+        k = self._find(kernel)
+        args = k["args"]
+        layout = (ctypes.c_uint32 * (3 * len(args)))()
+        for i, a in enumerate(args):
+            vk = str(a.get("value_kind") or a.get("kind") or a.get(".value_kind")
+                     or "by_value")
+            layout[3 * i + 0] = int(a.get("off", a.get(".offset", 0)))
+            layout[3 * i + 1] = int(a.get("size", a.get(".size", 0)))
+            layout[3 * i + 2] = KINDS.get(vk, 0)
+        a = (ctypes.c_uint64 * len(argv))(*[_pack(v) for v in argv])
+        rc = self._lib.fm_launch_dyn(
+            str(k.get("name", kernel)).encode(), gx, gy, wx, wy, layout, len(args),
+            int(k.get("group_segment", 0)), int(k.get("private_segment", 0)),
+            int(k.get("kernarg_size", 0)), a, len(argv))
+        if rc != 0:
+            raise RuntimeError(f"fm_launch_dyn({kernel}) 失败 rc={rc}")
+
+    def launch_any(self, kernel: str, grid: int, workgroup: int, argv: list) -> None:
+        """优先用动态 metadata；catalog 里没有时退回编译期内核表。"""
+        try:
+            self.launch_dyn(kernel, grid, 1, workgroup, 1, argv)
+        except KeyError:
+            self.launch(kernel, grid, workgroup, argv)
 
     def sync(self) -> None:
         self._lib.fm_sync()

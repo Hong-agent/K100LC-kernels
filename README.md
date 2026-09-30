@@ -40,6 +40,18 @@ rt.sync()
 print(info("gemv_f32_warp_k"))
 ```
 
+任意 HSACO（包括编译器新产出的内核）可以用动态 metadata 启动，不必重建
+`libfm_engine.so`：
+
+```python
+rt = Runtime(hsaco="build/my.hsaco", catalog="build/my.catalog.json")
+rt.launch_dyn("my_kernel", grid_x, 1, workgroup_x, 1, [arg0, arg1, ...])
+```
+
+`Runtime.launch_dyn` 的 catalog 也可以放在 HSACO 旁边
+（`<name>.catalog.json`，编译器会自动生成）。当前 HSA 路径**一个进程只加载
+一个 HSACO**；多个 HSACO 先用 `tools/merge_hsacos.py` 合并，或分进程使用。
+
 ## 快速调用（C++）
 
 ```cpp

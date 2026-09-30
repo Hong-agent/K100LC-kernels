@@ -16,3 +16,5 @@
 - 新增内核编译器 `compiler/`：受限 Python DSL → gfx926 汇编 → HSACO，
   支持 `gid/tid/bid`、指针 load/store、if/for、f32/u32/s32、常用数学内建；
   `vadd/silu/axpy/loop` 已与 numpy 对账。
+- 新增动态内核启动 `fm_launch_dyn` / `Runtime.launch_dyn`：运行时遍历
+  HSACO 符号表，用 catalog 参数布局启动；编译器产物无需重建 libfm_engine。
