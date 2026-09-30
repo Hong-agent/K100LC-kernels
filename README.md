@@ -4,7 +4,7 @@
 FASTASM 基线内核 + 无 DTK 的常驻 HSA 运行时。后续项目直接引用本目录即可，
 不需要再复制 `asm.py`、HSACO 管线或 HSA 垫片。
 
-当前包含 **99 个内核**（81 个 FASTASM 基线 + 18 个自研），预编译产物在
+当前包含 **100 个内核**（81 个 FASTASM 基线 + 19 个自研），预编译产物在
 `prebuilt/`；内核目录在 `python/k100lc_kernels/catalog.json`。
 
 ## 目录

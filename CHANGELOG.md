@@ -27,3 +27,4 @@
 - 用编译器 DSL 生成 `q4k_dequant` / `q5k_dequant`（Q4_K/Q5_K → f32），
   与参考解码 bit-exact；主流 GGUF K-quant 解码补齐，内核总数 98。
 - 新增 `layernorm_k`（warp-per-row + 和/平方和归约）；内核总数 99。
+- 新增 `topk_k`（行 top-k，KMAX=16，插入式）；内核总数 100。

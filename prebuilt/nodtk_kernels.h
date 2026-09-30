@@ -1791,6 +1791,14 @@ static const RtArg k_args_98[] = {
     {20u, 4u, 0},   // by_value/global
     {24u, 4u, 0},   // by_value/global
 };
+static const RtArg k_args_99[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+};
 
 static const RtKernel k_table[] = {
     {"_Z10nvfp4_gemvILi1ELi1EEvPKjPKhPKaS5_PKfPfiif", "nvfp4_gemv<1,1>", 22u, k_args_0, 320u, 1024u, 0u},
@@ -1892,5 +1900,6 @@ static const RtKernel k_table[] = {
     {"q6k_dequant", "q6k_dequant", 16u, k_args_96, 80u, 0u, 0u},
     {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_97, 24u, 0u, 0u},
     {"softmax_k", "softmax_k", 5u, k_args_98, 32u, 1024u, 0u},
+    {"topk_k", "topk_k", 6u, k_args_99, 40u, 0u, 0u},
 };
-static const int k_table_n = 99;
+static const int k_table_n = 100;

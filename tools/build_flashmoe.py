@@ -29,6 +29,7 @@ import gen_q4_0_dequant  # noqa: E402
 import gen_q8_0_dequant  # noqa: E402
 import gen_softmax  # noqa: E402
 import gen_layernorm  # noqa: E402
+import gen_topk  # noqa: E402
 import gen_iq2s_dequant  # noqa: E402
 import gen_iq3s_dequant  # noqa: E402
 import gen_iq3xxs_dequant  # noqa: E402
@@ -41,7 +42,7 @@ MODULES = [
     gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_i8, gen_iq4nl_dequant, gen_iq4nl_to_i8,
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
     gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
-    gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_layernorm,
+    gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_layernorm, gen_topk,
 ]
 
 
