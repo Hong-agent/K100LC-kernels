@@ -18,7 +18,7 @@ FASTASM 基线内核 + 无 DTK 的常驻 HSA 运行时。后续项目直接引�
 | `runtime/fm_engine.{h,cpp}` | 常驻引擎 C ABI |
 | `python/k100lc_kernels/` | Python 封装 + 内核目录 |
 | `compiler/` | 受限 Python DSL → gfx926 汇编 → HSACO 的编译器 |
-| `prebuilt/` | `k100lc_kernels.hsaco`、`libfm_engine.so`、`nodtk_kernels.h` |
+| `prebuilt/` | `k100lc_base.hsaco`（81 基线）、`k100lc_kernels.hsaco`（91 全量）、`libfm_engine.so`、`nodtk_kernels.h` |
 | `docs/ABI.md` | 参数布局、grid 语义、加内核/更新流程 |
 
 ## 快速调用（Python）

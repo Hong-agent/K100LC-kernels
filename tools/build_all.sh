@@ -21,6 +21,7 @@ g++ -O2 -std=c++17 -fPIC -shared \
     -L/opt/hyhal/lib -lhsa-runtime64 -lpthread
 
 cp -f build/k100lc_kernels.hsaco prebuilt/k100lc_kernels.hsaco
+cp -f build/k100lc_base.hsaco prebuilt/k100lc_base.hsaco
 cp -f build/nodtk_kernels.h prebuilt/nodtk_kernels.h
 cp -f build/libfm_engine.so prebuilt/libfm_engine.so
 echo "-> prebuilt/k100lc_kernels.hsaco + prebuilt/libfm_engine.so"
