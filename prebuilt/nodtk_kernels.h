@@ -1875,8 +1875,17 @@ static const RtArg k_args_102[] = {
 static const RtArg k_args_103[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {20u, 4u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
+    {40u, 4u, 0},   // by_value/global
+    {44u, 4u, 0},   // by_value/global
+    {48u, 8u, 0},   // by_value/global
+    {56u, 4u, 0},   // by_value/global
+    {60u, 4u, 0},   // by_value/global
+    {64u, 4u, 0},   // by_value/global
 };
 static const RtArg k_args_104[] = {
     {0u, 8u, 0},   // by_value/global
@@ -1887,18 +1896,24 @@ static const RtArg k_args_104[] = {
 static const RtArg k_args_105[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
+};
+static const RtArg k_args_106[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
     {24u, 4u, 0},   // by_value/global
     {28u, 4u, 0},   // by_value/global
 };
-static const RtArg k_args_106[] = {
+static const RtArg k_args_107[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
     {20u, 4u, 0},   // by_value/global
     {24u, 4u, 0},   // by_value/global
 };
-static const RtArg k_args_107[] = {
+static const RtArg k_args_108[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -2011,10 +2026,11 @@ static const RtKernel k_table[] = {
     {"q4k_dequant", "q4k_dequant", 16u, k_args_100, 80u, 0u, 0u},
     {"q5k_dequant", "q5k_dequant", 16u, k_args_101, 80u, 0u, 0u},
     {"q6k_dequant", "q6k_dequant", 16u, k_args_102, 80u, 0u, 0u},
-    {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_103, 24u, 0u, 0u},
-    {"reduce_blocks_k", "reduce_blocks_k", 4u, k_args_104, 24u, 0u, 0u},
-    {"router_top10_k", "router_top10_k", 5u, k_args_105, 32u, 0u, 0u},
-    {"softmax_k", "softmax_k", 5u, k_args_106, 32u, 1024u, 0u},
-    {"topk_k", "topk_k", 6u, k_args_107, 40u, 0u, 0u},
+    {"q6k_dot_k", "q6k_dot_k", 13u, k_args_103, 72u, 0u, 0u},
+    {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_104, 24u, 0u, 0u},
+    {"reduce_blocks_k", "reduce_blocks_k", 4u, k_args_105, 24u, 0u, 0u},
+    {"router_top10_k", "router_top10_k", 5u, k_args_106, 32u, 0u, 0u},
+    {"softmax_k", "softmax_k", 5u, k_args_107, 32u, 1024u, 0u},
+    {"topk_k", "topk_k", 6u, k_args_108, 40u, 0u, 0u},
 };
-static const int k_table_n = 108;
+static const int k_table_n = 109;

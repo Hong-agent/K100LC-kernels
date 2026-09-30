@@ -73,7 +73,23 @@ Runtime.launch2d(name, gx, gy, wx, wy, argv)
 | `iq3s_dot_k` | IQ3_S 原生解码 + 点积（256/块） | `(...,grid)` |
 | `q2_0_dot_k` | Q2_0 原生解码 + 点积（64/块） | `(w,x,partial,...)` |
 | `iq4xs_dot_k` | IQ4_XS 原生解码 + 点积（256/块） | `(w,x,partial,...)` |
+| `q6k_dot_k` | Q6_K 原生解码 + 点积（256/块） | `(w,x,partial,...)` |
 | `reduce_blocks_k` | 每行 nbpr 个 partial 求和 | `(partial,y,nrows,nbpr)` |
+
+`*_dot_k` 完整签名（所有类型一致，类型差异只在块解码部分）：
+
+```
+<type>_dot_k(const uint8_t* w, const float* x, float* partial,
+             uint32_t nblocks, uint32_t group_size, uint32_t nbpr,
+             uint32_t magic_nbpr, uint32_t rows_per_exp, uint32_t magic_rpe,
+             [表指针...], const uint32_t* ids, uint32_t stride,
+             uint32_t rows_per_w, uint32_t magic_rpw)
+```
+
+一个 work-item 算「一个权重块 × 一行」的点积，写 `partial[块号]`；`reduce_blocks_k`
+再按 `nbpr` 个一份求和。`rows_per_exp`（x 侧每专家组行数）与 `rows_per_w`
+（权重侧每专家组行数）可以不同，gate/up 就是「10 个专家共用一份 x」。dense
+单矩阵时传 `ids=[0]`、`rows_per_exp = rows_per_w = 总行数`。
 | `sigmoid_mul_k` | `y=x*sigmoid(g)` | `(y,x,g,n)` |
 | `l2norm_k` | 每 S 维 L2 归一化 | `(x,S,eps)`，grid=rows |
 | `rmsnorm_gated_k` | RMSNorm + sigmoid 门 | `(y,x,w,g,D,eps)`，grid=rows |

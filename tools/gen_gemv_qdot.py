@@ -602,6 +602,94 @@ def gen_iq4xs_dot_asm() -> str:
     return "\n".join(L) + "\n"
 
 
+def _gen_q6k_dot_asm() -> str:
+    """Q6_K 融合点积（256 权重 / 210 字节块：ql[128] + qh[64] + sc[16] + d）。
+
+    元素映射（与 `iq_dequant.dequant_q6_k` 一致）：
+        half∈{0,1}，l∈[0,32)：
+          q1 = (ql[l]&0xF)      | ((qh[l]>>0 &3)<<4) - 32 → 元素 half*128+l
+          q2 = (ql[l+32]&0xF)   | ((qh[l]>>2 &3)<<4) - 32 → half*128+32+l
+          q3 = (ql[l]>>4)       | ((qh[l]>>4 &3)<<4) - 32 → half*128+64+l
+          q4 = (ql[l+32]>>4)    | ((qh[l]>>6 &3)<<4) - 32 → half*128+96+l
+        尺度：16 个 int8，q1/q2/q3/q4 分别用 sc[half*8+is+0/2/4/6]（is=l//16）。
+    """
+    L: list[str] = []
+    em = L.append
+    em(".text")
+    em(f"k_{Q6K_NAME}:")
+    dot_head(L, 0)
+    dot_xaddr(L, 10)                               # BLK=256 → *1024 B
+    em("v_mov_b32_e32 v48, 210")                   # v_mul_lo_u32 的大立即数不可靠
+    em("v_mul_lo_u32 v2, v124, v48")
+    em("v_add_u32_e32 v2, v2, v120")
+    em("v_mov_b32_e32 v4, s16")
+    em("v_mov_b32_e32 v5, s17")
+    em("v_add_co_u32_e32 v4, vcc, v4, v2")
+    em("v_addc_co_u32_e32 v5, vcc, v5, v3, vcc")
+    # global_load_ushort 没有 offset 形式：把指针先推到 d 的位置
+    em("v_mov_b32_e32 v44, v4")
+    em("v_mov_b32_e32 v45, v5")
+    em("v_mov_b32_e32 v46, 208")
+    em("v_add_co_u32_e32 v44, vcc, v44, v46")
+    em("v_addc_co_u32_e32 v45, vcc, v45, v3, vcc")
+    em("global_load_ushort v8, v[44:45], off")
+    em("global_load_dwordx4 v[32:35], v[4:5], off offset:192")
+    em("s_waitcnt vmcnt(0)")
+    em("v_cvt_f32_f16_e32 v8, v8")
+    em("v_mov_b32_e32 v47, 0xc2000000")            # -32.0f（不是 inline 常量）
+    # 16 个 int8 尺度 × d → v128..v143
+    for n in range(16):
+        q, b = n // 4, n % 4
+        em(f"v_lshrrev_b32_e32 v36, {8 * b}, v{32 + q}")
+        em("v_lshlrev_b32_e32 v36, 24, v36")
+        em("v_ashrrev_i32_e32 v36, 24, v36")
+        em("v_cvt_f32_i32_e32 v36, v36")
+        em(f"v_mul_f32_e32 v{128 + n}, v8, v36")
+    for half in range(2):
+        for l0 in range(0, 32, 4):
+            sb = half * 8 + l0 // 16
+            em(f"global_load_dword v20, v[4:5], off offset:{half * 64 + l0}")
+            em(f"global_load_dword v21, v[4:5], off offset:{half * 64 + 32 + l0}")
+            em(f"global_load_dword v22, v[4:5], off offset:{128 + half * 32 + l0}")
+            for base in (0, 32, 64, 96):
+                em(f"global_load_dwordx4 v[{96 + base // 8}:{99 + base // 8}], "
+                   f"v[6:7], off offset:{4 * (half * 128 + base + l0)}")
+            em("s_waitcnt vmcnt(0)")
+            for si, (dreg, hi, base, qs) in enumerate(
+                    (("v20", 0, 0, 0), ("v21", 0, 32, 2),
+                     ("v20", 1, 64, 4), ("v21", 1, 96, 6))):
+                xb = 96 + base // 8
+                for j in range(4):
+                    em(f"v_lshrrev_b32_e32 v36, {8 * j}, {dreg}")
+                    em("v_and_b32_e32 v36, 0xff, v36")
+                    if hi == 0:
+                        em("v_and_b32_e32 v36, 0xf, v36")
+                    else:
+                        em("v_lshrrev_b32_e32 v36, 4, v36")
+                    em(f"v_lshrrev_b32_e32 v37, {8 * j}, v22")
+                    em("v_and_b32_e32 v37, 0xff, v37")
+                    if qs:
+                        em(f"v_lshrrev_b32_e32 v37, {qs}, v37")
+                    em("v_and_b32_e32 v37, 3, v37")
+                    em("v_lshlrev_b32_e32 v37, 4, v37")
+                    em("v_or_b32_e32 v36, v36, v37")
+                    em("v_cvt_f32_u32_e32 v36, v36")
+                    em("v_add_f32_e32 v36, v47, v36")
+                    em(f"v_mul_f32_e32 v36, v{128 + sb + 2 * si}, v36")
+                    em(f"v_fma_f32 v{DOT_ACC[j]}, v36, v{xb + j}, v{DOT_ACC[j]}")
+    dot_tail(L)
+    return "\n".join(L) + "\n"
+
+
+Q6K_NAME = "q6k_dot_k"
+Q6K_ARGS = dot_args(0)
+Q6K_KERNARG = dot_kernarg(0)
+
+
+def gen_q6k_dot_asm() -> str:
+    return _gen_q6k_dot_asm()
+
+
 # --------------------------------------------------------------------------
 # 参考实现（numpy）：核对 GPU 结果
 # --------------------------------------------------------------------------
@@ -1031,6 +1119,13 @@ def selftest_iq4xs() -> int:
                              prefer="blk.0.attn_q.weight")
 
 
+def selftest_q6k() -> int:
+    from iq_dequant import dequant_q6_k
+    return _selftest_notable("Q6_K", Q6K_NAME, gen_q6k_dot_asm, Q6K_ARGS,
+                             Q6K_KERNARG, 210, 256, dequant_q6_k,
+                             prefer="blk.3.attn_q.weight")
+
+
 def main() -> int:
     rc = selftest_iq4nl()
     rc |= selftest_iq3xxs()
@@ -1038,6 +1133,7 @@ def main() -> int:
     rc |= selftest_iq3s()
     rc |= selftest_q2_0()
     rc |= selftest_iq4xs()
+    rc |= selftest_q6k()
     return rc
 
 
@@ -1049,6 +1145,7 @@ KERNELS = [
     (IQ3S_NAME, gen_iq3s_dot_asm, IQ3S_ARGS, IQ3S_KERNARG),
     (Q20_NAME, gen_q2_0_dot_asm, Q20_ARGS, Q20_KERNARG),
     (IQ4XS_NAME, gen_iq4xs_dot_asm, IQ4XS_ARGS, IQ4XS_KERNARG),
+    (Q6K_NAME, gen_q6k_dot_asm, Q6K_ARGS, Q6K_KERNARG),
     (REDUCE_NAME, gen_reduce_asm, REDUCE_ARGS, REDUCE_KERNARG),
 ]
 
