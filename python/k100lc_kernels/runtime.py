@@ -155,5 +155,14 @@ class Runtime:
         except KeyError:
             self.launch(kernel, grid, workgroup, argv)
 
+    def has(self, kernel: str) -> bool:
+        """编译期内核表里有没有这个内核。"""
+        try:
+            self._lib.fm_has_kernel.restype = ctypes.c_int
+            self._lib.fm_has_kernel.argtypes = [ctypes.c_char_p]
+            return bool(self._lib.fm_has_kernel(kernel.encode()))
+        except AttributeError:
+            return False
+
     def sync(self) -> None:
         self._lib.fm_sync()

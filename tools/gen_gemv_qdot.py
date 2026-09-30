@@ -83,11 +83,17 @@ def dot_args(n_tables: int = 0) -> list[dict]:
          scalar_arg(24, 4), scalar_arg(28, 4), scalar_arg(32, 4),
          scalar_arg(36, 4), scalar_arg(40, 4), scalar_arg(44, 4)]
     a += [buffer_arg(48 + 8 * i) for i in range(n_tables)]
+    # 专家组索引表 + 专家组字节跨度 + 「权重侧每专家组行数」及其除法魔法数。
+    # 注意 X 侧的专家组（`rows_per_exp`）和权重侧的专家组（这里）可以不同：
+    # gate/up 的 10 个专家共用同一份 x，X 侧只有一组，权重侧每 640 行换一个专家。
+    o = 48 + 8 * n_tables
+    a += [buffer_arg(o), scalar_arg(o + 8, 4), scalar_arg(o + 12, 4),
+          scalar_arg(o + 16, 4)]
     return a
 
 
 def dot_kernarg(n_tables: int = 0) -> int:
-    return 48 + 8 * n_tables
+    return ((48 + 8 * n_tables) + 20 + 7) // 8 * 8
 
 
 # v1 = 全局块号 i；v6:v7 = 激活里对应块的地址；v70..v73 = 累加器。
@@ -112,6 +118,12 @@ def dot_head(L: list[str], n_tables: int = 0, acc=None) -> None:
     for i in range(n_tables):
         em(f"s_load_dword s{28 + 2 * i}, s[4:5], {0x30 + 8 * i:#x}")
         em(f"s_load_dword s{29 + 2 * i}, s[4:5], {0x34 + 8 * i:#x}")
+    nid = 28 + 2 * n_tables
+    em(f"s_load_dword s{nid}, s[4:5], {0x30 + 8 * n_tables:#x}")      # ids
+    em(f"s_load_dword s{nid + 1}, s[4:5], {0x34 + 8 * n_tables:#x}")
+    em(f"s_load_dword s{nid + 2}, s[4:5], {0x38 + 8 * n_tables:#x}")  # 专家组跨度
+    em(f"s_load_dword s{nid + 3}, s[4:5], {0x3c + 8 * n_tables:#x}")  # 权重侧每专家行数
+    em(f"s_load_dword s{nid + 4}, s[4:5], {0x40 + 8 * n_tables:#x}")  # 其魔法数
     em("s_waitcnt lgkmcnt(0)")
     em("v_mov_b32_e32 v3, 0")
     em("v_mov_b32_e32 v1, s6")
@@ -124,6 +136,18 @@ def dot_head(L: list[str], n_tables: int = 0, acc=None) -> None:
     _divmod(L, "v50", "s26", "s27", "v53", "v55", "v54")  # e
     em("v_mul_lo_u32 v56, v53, s24")
     em("v_add_u32_e32 v56, v56, v52")              # xblk
+    # 权重侧的专家组号 ew = q1 / rows_per_w（gate/up 的 x 只有一组，ew 单独算）
+    _divmod(L, "v50", f"s{nid + 3}", f"s{nid + 4}", "v125", "v126", "v127")
+    em("v_mul_lo_u32 v124, v126, s24")
+    em("v_add_u32_e32 v124, v124, v52")
+    em("v_lshlrev_b32_e32 v121, 2, v125")
+    em(f"v_mov_b32_e32 v122, s{nid}")
+    em(f"v_mov_b32_e32 v123, s{nid + 1}")
+    em("v_add_co_u32_e32 v122, vcc, v122, v121")
+    em("v_addc_co_u32_e32 v123, vcc, v123, v3, vcc")
+    em("global_load_dword v121, v[122:123], off")
+    em("s_waitcnt vmcnt(0)")
+    em(f"v_mul_lo_u32 v120, v121, s{nid + 2}")
     for r in acc:
         em(f"v_mov_b32_e32 v{r}, 0")
 
@@ -227,7 +251,8 @@ def gen_iq4nl_dot_asm() -> str:
     dot_head(L, 0)
     dot_xaddr(L, 7)                                # BLK=32 → *128 B
     # waddr = w + i*18
-    em("v_mul_lo_u32 v2, v1, 18")
+    em("v_mul_lo_u32 v2, v124, 18")
+    em("v_add_u32_e32 v2, v2, v120")
     em("v_mov_b32_e32 v4, s16")
     em("v_mov_b32_e32 v5, s17")
     em("v_add_co_u32_e32 v4, vcc, v4, v2")
@@ -324,7 +349,8 @@ def gen_iq2s_dot_asm() -> str:
     em("v_mov_b32_e32 v9, s28")
     em("v_mov_b32_e32 v10, s29")
     em("v_mov_b32_e32 v80, 82")
-    em("v_mul_lo_u32 v2, v1, v80")
+    em("v_mul_lo_u32 v2, v124, v80")
+    em("v_add_u32_e32 v2, v2, v120")
     em("v_mov_b32_e32 v4, s16")
     em("v_mov_b32_e32 v5, s17")
     em("v_add_co_u32_e32 v4, vcc, v4, v2")
@@ -390,7 +416,8 @@ def gen_iq3s_dot_asm() -> str:
     em("v_mov_b32_e32 v9, s28")
     em("v_mov_b32_e32 v10, s29")
     em("v_mov_b32_e32 v80, 110")
-    em("v_mul_lo_u32 v2, v1, v80")
+    em("v_mul_lo_u32 v2, v124, v80")
+    em("v_add_u32_e32 v2, v2, v120")
     em("v_mov_b32_e32 v4, s16")
     em("v_mov_b32_e32 v5, s17")
     em("v_add_co_u32_e32 v4, vcc, v4, v2")
@@ -458,7 +485,8 @@ def gen_q2_0_dot_asm() -> str:
     em(f"k_{Q20_NAME}:")
     dot_head(L, 0)
     dot_xaddr(L, 8)                                # BLK=64 → *256 B
-    em("v_mul_lo_u32 v2, v1, 18")
+    em("v_mul_lo_u32 v2, v124, 18")
+    em("v_add_u32_e32 v2, v2, v120")
     em("v_mov_b32_e32 v4, s16")
     em("v_mov_b32_e32 v5, s17")
     em("v_add_co_u32_e32 v4, vcc, v4, v2")
@@ -533,7 +561,8 @@ def gen_iq4xs_dot_asm() -> str:
     em("v_mov_b32_e32 v13, 0x0000ff00")
     em("v_mov_b32_e32 v47, 0xc2000000")
     em("v_mov_b32_e32 v80, 136")
-    em("v_mul_lo_u32 v2, v1, v80")
+    em("v_mul_lo_u32 v2, v124, v80")
+    em("v_add_u32_e32 v2, v2, v120")
     em("v_mov_b32_e32 v4, s16")
     em("v_mov_b32_e32 v5, s17")
     em("v_add_co_u32_e32 v4, vcc, v4, v2")
@@ -610,7 +639,8 @@ def gen_iq3xxs_dot_asm() -> str:
     em("v_mov_b32_e32 v11, s30")                   # ksigns lo
     em("v_mov_b32_e32 v12, s31")                   # ksigns hi
     em("v_mov_b32_e32 v80, 98")
-    em("v_mul_lo_u32 v2, v1, v80")
+    em("v_mul_lo_u32 v2, v124, v80")
+    em("v_add_u32_e32 v2, v2, v120")
     em("v_mov_b32_e32 v4, s16")
     em("v_mov_b32_e32 v5, s17")
     em("v_add_co_u32_e32 v4, vcc, v4, v2")
@@ -740,10 +770,18 @@ def selftest_iq4nl(nbpr: int = 20, rows_per_exp: int = 40) -> int:
                    {"scalar": {"dtype": "u32", "value": nbpr}},
                    {"scalar": {"dtype": "u32", "value": m_nbpr}},
                    {"scalar": {"dtype": "u32", "value": rows_per_exp}},
-                   {"scalar": {"dtype": "u32", "value": m_rpe}}],
+                   {"scalar": {"dtype": "u32", "value": m_rpe}},
+                   {"buffer": "ids"},
+                   {"scalar": {"dtype": "u32",
+                               "value": rows_per_exp * nbpr * 18}},
+                   {"scalar": {"dtype": "u32", "value": rows_per_exp}},
+                   {"scalar": {"dtype": "u32",
+                               "value": div_magic(rows_per_exp,
+                                                  nblocks // nbpr + 1)}}],
                   {"w": {"dtype": "u8", "values": list(raw)},
                    "x": {"dtype": "f32", "values": x.reshape(-1).tolist()},
-                   "p": {"dtype": "f32", "values": [0.0] * nblocks}},
+                   "p": {"dtype": "f32", "values": [0.0] * nblocks},
+                   "ids": {"dtype": "u32", "values": list(range(n_exp))}},
                   grid=nblocks, workgroup=64)
     got = np.array(out["p"], dtype=np.float32)
     dmax = float(np.abs(got - ref).max())
@@ -830,10 +868,18 @@ def selftest_iq3xxs(nbpr: int = 10, rows_per_exp: int = 24) -> int:
                    {"scalar": {"dtype": "u32", "value": m_nbpr}},
                    {"scalar": {"dtype": "u32", "value": rows_per_exp}},
                    {"scalar": {"dtype": "u32", "value": m_rpe}},
-                   {"buffer": "g"}, {"buffer": "ks"}],
+                   {"buffer": "g"}, {"buffer": "ks"},
+                   {"buffer": "ids"},
+                   {"scalar": {"dtype": "u32",
+                               "value": rows_per_exp * nbpr * 98}},
+                   {"scalar": {"dtype": "u32", "value": rows_per_exp}},
+                   {"scalar": {"dtype": "u32",
+                               "value": div_magic(rows_per_exp,
+                                                  nblocks // nbpr + 1)}}],
                   {"w": {"dtype": "u8", "values": list(raw)},
                    "x": {"dtype": "f32", "values": x.reshape(-1).tolist()},
                    "p": {"dtype": "f32", "values": [0.0] * nblocks},
+                   "ids": {"dtype": "u32", "values": list(range(n_exp))},
                    "g": {"dtype": "u8", "values": list(grid)},
                    "ks": {"dtype": "u8", "values": list(ks)}},
                   grid=nblocks, workgroup=64)
@@ -877,10 +923,17 @@ def _selftest_grid(qtype: str, kernel: str, gen, args, kernarg: int, block_bytes
                    {"scalar": {"dtype": "u32", "value": m1}},
                    {"scalar": {"dtype": "u32", "value": rows_per_exp}},
                    {"scalar": {"dtype": "u32", "value": m2}},
-                   {"buffer": "g"}],
+                   {"buffer": "g"}, {"buffer": "ids"},
+                   {"scalar": {"dtype": "u32",
+                               "value": rows_per_exp * nbpr * block_bytes}},
+                   {"scalar": {"dtype": "u32", "value": rows_per_exp}},
+                   {"scalar": {"dtype": "u32",
+                               "value": div_magic(rows_per_exp,
+                                                  nblocks // nbpr + 1)}}],
                   {"w": {"dtype": "u8", "values": list(raw)},
                    "x": {"dtype": "f32", "values": x.reshape(-1).tolist()},
                    "p": {"dtype": "f32", "values": [0.0] * nblocks},
+                   "ids": {"dtype": "u32", "values": list(range(n_exp))},
                    "g": {"dtype": "u8", "values": list(table_bytes)}},
                   grid=nblocks, workgroup=64)
     got = np.array(out["p"], dtype=np.float32)
@@ -942,10 +995,18 @@ def _selftest_notable(qtype: str, kernel: str, gen, args, kernarg: int,
                    {"scalar": {"dtype": "u32", "value": nbpr}},
                    {"scalar": {"dtype": "u32", "value": m1}},
                    {"scalar": {"dtype": "u32", "value": rows_per_exp}},
-                   {"scalar": {"dtype": "u32", "value": m2}}],
+                   {"scalar": {"dtype": "u32", "value": m2}},
+                   {"buffer": "ids"},
+                   {"scalar": {"dtype": "u32",
+                               "value": rows_per_exp * nbpr * block_bytes}},
+                   {"scalar": {"dtype": "u32", "value": rows_per_exp}},
+                   {"scalar": {"dtype": "u32",
+                               "value": div_magic(rows_per_exp,
+                                                  nblocks // nbpr + 1)}}],
                   {"w": {"dtype": "u8", "values": list(raw)},
                    "x": {"dtype": "f32", "values": x.reshape(-1).tolist()},
-                   "p": {"dtype": "f32", "values": [0.0] * nblocks}},
+                   "p": {"dtype": "f32", "values": [0.0] * nblocks},
+                   "ids": {"dtype": "u32", "values": list(range(n_exp))}},
                   grid=nblocks, workgroup=64)
     got = np.array(out["p"], dtype=np.float32)
     dmax = float(np.abs(got - ref).max())

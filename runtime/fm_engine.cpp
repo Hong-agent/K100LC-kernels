@@ -67,6 +67,11 @@ int fm_sync(void) { return hipDeviceSynchronize() == hipSuccess ? 0 : -1; }
 int fm_launch2d(const char* kernel, uint32_t gx, uint32_t gy,
                 uint32_t wx, uint32_t wy, const uint64_t* argv, int nargs);
 
+// 该 HSACO 里有没有这个内核（调用方按需启用新内核时用）。
+int fm_has_kernel(const char* kernel) {
+    return hsart_lookup(kernel) ? 1 : 0;
+}
+
 int fm_launch(const char* kernel, uint32_t grid, uint32_t workgroup,
               const uint64_t* argv, int nargs) {
     return fm_launch2d(kernel, grid, 1, workgroup, 1, argv, nargs);
