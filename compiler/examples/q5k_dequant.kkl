@@ -1,0 +1,33 @@
+def q5k_dequant(w: ptr[u8], y: ptr[f32], nblocks: u32):
+    b = gid()
+    if b < nblocks:
+        wb = b * 176
+        yb = b * 256
+        d = f16_to_f32(load16(w, wb + 0))
+        dm = f16_to_f32(load16(w, wb + 2))
+        for s in range(0, 4):
+            j0 = s * 2
+            j1 = j0 + 1
+            sc0 = 0
+            m0 = 0
+            sc1 = 0
+            m1 = 0
+            if j0 < 4:
+                sc0 = w[wb + 4 + j0] & 63
+                m0 = w[wb + 4 + j0 + 4] & 63
+            else:
+                sc0 = (w[wb + 4 + j0 + 4] & 15) | ((w[wb + 4 + j0 - 4] >> 6) << 4)
+                m0 = (w[wb + 4 + j0 + 4] >> 4) | ((w[wb + 4 + j0] >> 6) << 4)
+            if j1 < 4:
+                sc1 = w[wb + 4 + j1] & 63
+                m1 = w[wb + 4 + j1 + 4] & 63
+            else:
+                sc1 = (w[wb + 4 + j1 + 4] & 15) | ((w[wb + 4 + j1 - 4] >> 6) << 4)
+                m1 = (w[wb + 4 + j1 + 4] >> 4) | ((w[wb + 4 + j1] >> 6) << 4)
+            for i in range(0, 32):
+                q = w[wb + 48 + s * 32 + i]
+                qh = w[wb + 16 + i]
+                lo = (q & 15) + (((qh >> j0) & 1) << 4)
+                hi = (q >> 4) + (((qh >> j1) & 1) << 4)
+                y[yb + s * 64 + i] = d * f32(sc0) * f32(lo) - dm * f32(m0)
+                y[yb + s * 64 + 32 + i] = d * f32(sc1) * f32(hi) - dm * f32(m1)

@@ -86,6 +86,7 @@ class CodeGen:
         self.var_v = 2
         self.var_s = 16
         self.tmp_v = 64
+        self.tmp_base = 64
         self.tmp_s = 64
         self.addr_v = 200
         self.save_s = 48
@@ -110,7 +111,7 @@ class CodeGen:
     def alloc_tmp_v(self) -> int:
         r = self.tmp_v
         self.tmp_v += 1
-        if self.tmp_v > 255:
+        if self.tmp_v > 245:
             raise CompileError("VGPR 溢出（v1 不做 spill）")
         self.max_v = max(self.max_v, r)
         return r
@@ -120,12 +121,10 @@ class CodeGen:
         return
 
     def alloc_addr_pair(self) -> tuple[int, int]:
-        lo = self.addr_v
-        self.addr_v += 2
-        if self.addr_v > 255:
-            raise CompileError("地址 VGPR 溢出")
-        self.max_v = max(self.max_v, lo + 1)
-        return lo, lo + 1
+        # 所有 load/store 复用同一个高地址对；表达式求值不会同时持有两个地址
+        # （前一个 load 的结果已经在临时 VGPR 里）。这样临时寄存器不会撞地址对。
+        self.max_v = max(self.max_v, 255)
+        return 254, 255
 
     def free_addr_pair(self) -> None:
         return
@@ -551,6 +550,10 @@ class CodeGen:
 
     # ---------------- 语句 ----------------
     def stmt(self, node) -> None:
+        self._stmt(node)
+        self.tmp_v = self.tmp_base
+
+    def _stmt(self, node) -> None:
         if isinstance(node, ast.Assign):
             if len(node.targets) != 1:
                 raise CompileError("只支持单赋值")

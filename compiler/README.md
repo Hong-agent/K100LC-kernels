@@ -37,6 +37,7 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
   `for i in range(a, b)`、`break`/`continue`
 * 内存：`buf[index]` load/store，下标可以是 varying 表达式
 * 运算符：`+ - * /`、`& | ^ <<`、比较 `== != < <= > >=`
+* `u8/u16` 指针、`load16`、`f16_to_f32`、`s8`（K-quant 解码所需）
 
 编译出的内核使用标准隐藏 kernarg（`hidden_block_count_x`、
 `hidden_group_size_x`…），所以 `gid()` 可用于跨 workgroup。
@@ -57,6 +58,8 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
 
 * 新内建：在 `k100lc_compiler/core.py::CodeGen.call` 加一条 emission。
 * 新语句：在 `CodeGen.stmt` 加 AST 分支。
+* 编译器已能生成 Q6_K/Q4_K/Q5_K 解码器（见 `examples/*.kkl`），
+  `compiler/tools/export_kernel.py --install` 可直接并入内核包。
 * 生成的内核要纳入 `prebuilt/k100lc_kernels.hsaco`：把生成的 `.s`
   放进 `kernels/asm/k_new/` 或写一个 `tools/gen_*.py`，再跑
   `tools/build_all.sh`。
