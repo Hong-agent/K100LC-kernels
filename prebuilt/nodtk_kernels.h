@@ -1705,8 +1705,12 @@ static const RtArg k_args_90[] = {
 static const RtArg k_args_91[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {20u, 4u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 8u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
+    {40u, 4u, 0},   // by_value/global
+    {44u, 4u, 0},   // by_value/global
 };
 static const RtArg k_args_92[] = {
     {0u, 8u, 0},   // by_value/global
@@ -1718,19 +1722,7 @@ static const RtArg k_args_93[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
-    {24u, 4u, 1},   // hidden_block_count_x
-    {28u, 4u, 2},   // hidden_block_count_y
-    {32u, 4u, 3},   // hidden_block_count_z
-    {36u, 2u, 4},   // hidden_group_size_x
-    {38u, 2u, 5},   // hidden_group_size_y
-    {40u, 2u, 6},   // hidden_group_size_z
-    {42u, 2u, 7},   // hidden_remainder_x
-    {44u, 2u, 8},   // hidden_remainder_y
-    {46u, 2u, 9},   // hidden_remainder_z
-    {48u, 8u, 10},   // hidden_global_offset_x
-    {56u, 8u, 11},   // hidden_global_offset_y
-    {64u, 8u, 12},   // hidden_global_offset_z
-    {72u, 2u, 13},   // hidden_grid_dims
+    {20u, 4u, 0},   // by_value/global
 };
 static const RtArg k_args_94[] = {
     {0u, 8u, 0},   // by_value/global
@@ -1772,9 +1764,27 @@ static const RtArg k_args_96[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
-    {20u, 4u, 0},   // by_value/global
+    {24u, 4u, 1},   // hidden_block_count_x
+    {28u, 4u, 2},   // hidden_block_count_y
+    {32u, 4u, 3},   // hidden_block_count_z
+    {36u, 2u, 4},   // hidden_group_size_x
+    {38u, 2u, 5},   // hidden_group_size_y
+    {40u, 2u, 6},   // hidden_group_size_z
+    {42u, 2u, 7},   // hidden_remainder_x
+    {44u, 2u, 8},   // hidden_remainder_y
+    {46u, 2u, 9},   // hidden_remainder_z
+    {48u, 8u, 10},   // hidden_global_offset_x
+    {56u, 8u, 11},   // hidden_global_offset_y
+    {64u, 8u, 12},   // hidden_global_offset_z
+    {72u, 2u, 13},   // hidden_grid_dims
 };
 static const RtArg k_args_97[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
+};
+static const RtArg k_args_98[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
@@ -1874,12 +1884,13 @@ static const RtKernel k_table[] = {
     {"iq4nl_dequant_k", "iq4nl_dequant_k", 4u, k_args_88, 24u, 0u, 0u},
     {"iq4nl_to_i8_k", "iq4nl_to_i8_k", 5u, k_args_89, 32u, 0u, 0u},
     {"iq4xs_dequant_k", "iq4xs_dequant_k", 4u, k_args_90, 24u, 0u, 0u},
-    {"q2_0_dequant_k", "q2_0_dequant_k", 4u, k_args_91, 24u, 0u, 0u},
-    {"q4_0_dequant_k", "q4_0_dequant_k", 4u, k_args_92, 24u, 0u, 0u},
-    {"q4k_dequant", "q4k_dequant", 16u, k_args_93, 80u, 0u, 0u},
-    {"q5k_dequant", "q5k_dequant", 16u, k_args_94, 80u, 0u, 0u},
-    {"q6k_dequant", "q6k_dequant", 16u, k_args_95, 80u, 0u, 0u},
-    {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_96, 24u, 0u, 0u},
-    {"softmax_k", "softmax_k", 5u, k_args_97, 32u, 1024u, 0u},
+    {"layernorm_k", "layernorm_k", 8u, k_args_91, 48u, 1024u, 0u},
+    {"q2_0_dequant_k", "q2_0_dequant_k", 4u, k_args_92, 24u, 0u, 0u},
+    {"q4_0_dequant_k", "q4_0_dequant_k", 4u, k_args_93, 24u, 0u, 0u},
+    {"q4k_dequant", "q4k_dequant", 16u, k_args_94, 80u, 0u, 0u},
+    {"q5k_dequant", "q5k_dequant", 16u, k_args_95, 80u, 0u, 0u},
+    {"q6k_dequant", "q6k_dequant", 16u, k_args_96, 80u, 0u, 0u},
+    {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_97, 24u, 0u, 0u},
+    {"softmax_k", "softmax_k", 5u, k_args_98, 32u, 1024u, 0u},
 };
-static const int k_table_n = 98;
+static const int k_table_n = 99;
