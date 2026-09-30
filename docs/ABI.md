@@ -66,6 +66,7 @@ Runtime.launch2d(name, gx, gy, wx, wy, argv)
 | `q5k_dequant` | Q5_K → f32（DSL 编译） | `(w,y,nblocks)` |
 | `layernorm_k` | LayerNorm（warp/row） | `(y,x,w,b,rows,cols,eps,64)` |
 | `topk_k` | 行 top-k（KMAX=16） | `(x,idx,val,rows,cols,k)` |
+| `router_top10_k` | MoE 路由 top-10 + softmax/renorm | `(logits,ids,weights,rows,n_experts)` |
 | `sigmoid_mul_k` | `y=x*sigmoid(g)` | `(y,x,g,n)` |
 | `l2norm_k` | 每 S 维 L2 归一化 | `(x,S,eps)`，grid=rows |
 | `rmsnorm_gated_k` | RMSNorm + sigmoid 门 | `(y,x,w,g,D,eps)`，grid=rows |

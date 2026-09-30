@@ -30,6 +30,7 @@ import gen_q8_0_dequant  # noqa: E402
 import gen_softmax  # noqa: E402
 import gen_layernorm  # noqa: E402
 import gen_topk  # noqa: E402
+import gen_router_top10  # noqa: E402
 import gen_iq2s_dequant  # noqa: E402
 import gen_iq3s_dequant  # noqa: E402
 import gen_iq3xxs_dequant  # noqa: E402
@@ -43,6 +44,7 @@ MODULES = [
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
     gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
     gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_layernorm, gen_topk,
+    gen_router_top10,
 ]
 
 

@@ -28,3 +28,5 @@
   与参考解码 bit-exact；主流 GGUF K-quant 解码补齐，内核总数 98。
 - 新增 `layernorm_k`（warp-per-row + 和/平方和归约）；内核总数 99。
 - 新增 `topk_k`（行 top-k，KMAX=16，插入式）；内核总数 100。
+- 新增 `router_top10_k`（MoE 路由 top-10 + top-10 内 softmax/renormalize，
+  row-per-thread）；内核总数 101。

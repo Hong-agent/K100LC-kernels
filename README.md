@@ -4,7 +4,7 @@
 FASTASM 基线内核 + 无 DTK 的常驻 HSA 运行时。后续项目直接引用本目录即可，
 不需要再复制 `asm.py`、HSACO 管线或 HSA 垫片。
 
-当前包含 **100 个内核**（81 个 FASTASM 基线 + 19 个自研），预编译产物在
+当前包含 **101 个内核**（81 个 FASTASM 基线 + 20 个自研），预编译产物在
 `prebuilt/`；内核目录在 `python/k100lc_kernels/catalog.json`。
 
 ## 目录
@@ -18,7 +18,7 @@ FASTASM 基线内核 + 无 DTK 的常驻 HSA 运行时。后续项目直接引�
 | `runtime/fm_engine.{h,cpp}` | 常驻引擎 C ABI |
 | `python/k100lc_kernels/` | Python 封装 + 内核目录 |
 | `compiler/` | 受限 Python DSL → gfx926 汇编 → HSACO 的编译器 |
-| `prebuilt/` | `k100lc_base.hsaco`（81 基线）、`k100lc_kernels.hsaco`（91 全量）、`libfm_engine.so`、`nodtk_kernels.h` |
+| `prebuilt/` | `k100lc_base.hsaco`（81 基线）、`k100lc_kernels.hsaco`（101 全量）、`libfm_engine.so`、`nodtk_kernels.h` |
 | `docs/ABI.md` | 参数布局、grid 语义、加内核/更新流程 |
 
 ## 快速调用（Python）
@@ -86,7 +86,7 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH /tmp/cpp_alloc prebuilt/k100lc_k
 bash tools/build_all.sh
 ```
 
-产物：`build/k100lc_kernels.hsaco`（91 内核）、`build/libfm_engine.so`、
+产物：`build/k100lc_kernels.hsaco`（101 内核）、`build/libfm_engine.so`、
 `python/k100lc_kernels/catalog.json`，并同步到 `prebuilt/`。
 
 ## 内核编译器

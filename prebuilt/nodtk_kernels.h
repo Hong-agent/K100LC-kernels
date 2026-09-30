@@ -1787,11 +1787,18 @@ static const RtArg k_args_97[] = {
 static const RtArg k_args_98[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+};
+static const RtArg k_args_99[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
     {20u, 4u, 0},   // by_value/global
     {24u, 4u, 0},   // by_value/global
 };
-static const RtArg k_args_99[] = {
+static const RtArg k_args_100[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -1899,7 +1906,8 @@ static const RtKernel k_table[] = {
     {"q5k_dequant", "q5k_dequant", 16u, k_args_95, 80u, 0u, 0u},
     {"q6k_dequant", "q6k_dequant", 16u, k_args_96, 80u, 0u, 0u},
     {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_97, 24u, 0u, 0u},
-    {"softmax_k", "softmax_k", 5u, k_args_98, 32u, 1024u, 0u},
-    {"topk_k", "topk_k", 6u, k_args_99, 40u, 0u, 0u},
+    {"router_top10_k", "router_top10_k", 5u, k_args_98, 32u, 0u, 0u},
+    {"softmax_k", "softmax_k", 5u, k_args_99, 32u, 1024u, 0u},
+    {"topk_k", "topk_k", 6u, k_args_100, 40u, 0u, 0u},
 };
-static const int k_table_n = 100;
+static const int k_table_n = 101;
