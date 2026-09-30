@@ -30,3 +30,10 @@
 - 新增 `topk_k`（行 top-k，KMAX=16，插入式）；内核总数 100。
 - 新增 `router_top10_k`（MoE 路由 top-10 + top-10 内 softmax/renormalize，
   row-per-thread）；内核总数 101。
+- 新增 **量化权重「原生解码 + 点积」融合 GEMV**：
+  `iq4nl_dot_k` / `iq3xxs_dot_k` / `iq2s_dot_k` / `iq3s_dot_k` /
+  `q2_0_dot_k` / `iq4xs_dot_k`（每块一项） + `reduce_blocks_k`（行归约）。
+  专家权重只读原编码（4.5 bit 而不是 f32），实测比
+  「解码成 f32 scratch + `gemv_f32_k`」快 **12~15 倍**；内核总数 108。
+- 修掉一个真机坑：SGPR 分配恰好用满最后一段时，最高一对 SGPR 会被硬件
+  改写成常量；`kernel_lab._max_registers` 现在统一多留一段 SGPR。

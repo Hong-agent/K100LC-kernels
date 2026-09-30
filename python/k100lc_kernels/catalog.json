@@ -8196,6 +8196,65 @@
    "private_segment": 0
   },
   {
+   "name": "iq2s_dot_k",
+   "lookup": "iq2s_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    }
+   ],
+   "kernarg_size": 56,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
    "name": "iq3s_dequant_k",
    "lookup": "iq3s_dequant_k",
    "args": [
@@ -8226,6 +8285,65 @@
     }
    ],
    "kernarg_size": 32,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "iq3s_dot_k",
+   "lookup": "iq3s_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    }
+   ],
+   "kernarg_size": 56,
    "group_segment": 0,
    "private_segment": 0
   },
@@ -8269,6 +8387,70 @@
    "private_segment": 0
   },
   {
+   "name": "iq3xxs_dot_k",
+   "lookup": "iq3xxs_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 56,
+     "size": 8,
+     "kind": "global_buffer"
+    }
+   ],
+   "kernarg_size": 64,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
    "name": "iq4nl_dequant_k",
    "lookup": "iq4nl_dequant_k",
    "args": [
@@ -8294,6 +8476,60 @@
     }
    ],
    "kernarg_size": 24,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "iq4nl_dot_k",
+   "lookup": "iq4nl_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 48,
    "group_segment": 0,
    "private_segment": 0
   },
@@ -8357,6 +8593,60 @@
     }
    ],
    "kernarg_size": 24,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "iq4xs_dot_k",
+   "lookup": "iq4xs_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 48,
    "group_segment": 0,
    "private_segment": 0
   },
@@ -8435,6 +8725,60 @@
     }
    ],
    "kernarg_size": 24,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "q2_0_dot_k",
+   "lookup": "q2_0_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 48,
    "group_segment": 0,
    "private_segment": 0
   },
@@ -8737,6 +9081,35 @@
   {
    "name": "q8_0_dequant_k",
    "lookup": "q8_0_dequant_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 20,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 24,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "reduce_blocks_k",
+   "lookup": "reduce_blocks_k",
    "args": [
     {
      "off": 0,

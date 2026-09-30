@@ -49,7 +49,11 @@ def _max_registers(text: str) -> tuple[int, int]:
         max_v = max(max_v, int(m.group(2) or m.group(1)))
     for m in re.finditer(r"\bv(\d+)\b", text):
         max_v = max(max_v, int(m.group(1)))
-    return max_s + 1, max_v + 1
+    # 本机实测：SGPR 用满到「最后一段」时，最高那一对（例如 sgpr_count 恰好
+    # 等于 32 时的 s[30:31]）会被硬件写成常量，读到 0/1 之类垃圾。多留一段
+    # （8 个）SGPR 之后 100% 正确，占用可以忽略，所以统一留余量。
+    sgprs = ((max_s + 1 + 7) // 8 + 1) * 8
+    return sgprs, max_v + 1
 
 
 def build_one(name: str, asm_text: str, args: list[dict], kernarg_size: int,

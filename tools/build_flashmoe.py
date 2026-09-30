@@ -31,6 +31,7 @@ import gen_softmax  # noqa: E402
 import gen_layernorm  # noqa: E402
 import gen_topk  # noqa: E402
 import gen_router_top10  # noqa: E402
+import gen_gemv_qdot  # noqa: E402
 import gen_iq2s_dequant  # noqa: E402
 import gen_iq3s_dequant  # noqa: E402
 import gen_iq3xxs_dequant  # noqa: E402
@@ -45,6 +46,7 @@ MODULES = [
     gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
     gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_layernorm, gen_topk,
     gen_router_top10,
+    gen_gemv_qdot,
 ]
 
 
@@ -52,8 +54,13 @@ def main() -> int:
     out = ROOT / "build" / "flashmoe_kernels"
     out.mkdir(parents=True, exist_ok=True)
     spec = []
+    jobs = []
     for mod in MODULES:
-        name, asm_text, args, ksize = mod.NAME, mod.gen_asm(), mod.ARGS, mod.KERNARG_SIZE
+        if hasattr(mod, "KERNELS"):
+            jobs.extend((nm, gen(), ar, ks) for nm, gen, ar, ks in mod.KERNELS)
+        else:
+            jobs.append((mod.NAME, mod.gen_asm(), mod.ARGS, mod.KERNARG_SIZE))
+    for name, asm_text, args, ksize in jobs:
         src = out / f"{name}.s"
         src.write_text(asm_text, encoding="utf-8")
         code, _ins, _lbl = asm.assemble(src)

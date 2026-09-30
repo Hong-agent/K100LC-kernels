@@ -67,6 +67,13 @@ Runtime.launch2d(name, gx, gy, wx, wy, argv)
 | `layernorm_k` | LayerNorm（warp/row） | `(y,x,w,b,rows,cols,eps,64)` |
 | `topk_k` | 行 top-k（KMAX=16） | `(x,idx,val,rows,cols,k)` |
 | `router_top10_k` | MoE 路由 top-10 + softmax/renorm | `(logits,ids,weights,rows,n_experts)` |
+| `iq4nl_dot_k` | IQ4_NL 原生解码 + 点积（32/块） | `(w,x,partial,nblocks,gs,nbpr,magic_nbpr,rows_per_exp,magic_rpe)` |
+| `iq3xxs_dot_k` | IQ3_XXS 原生解码 + 点积（256/块） | `(...,grid,ksigns)` |
+| `iq2s_dot_k` | IQ2_S 原生解码 + 点积（256/块） | `(...,grid)` |
+| `iq3s_dot_k` | IQ3_S 原生解码 + 点积（256/块） | `(...,grid)` |
+| `q2_0_dot_k` | Q2_0 原生解码 + 点积（64/块） | `(w,x,partial,...)` |
+| `iq4xs_dot_k` | IQ4_XS 原生解码 + 点积（256/块） | `(w,x,partial,...)` |
+| `reduce_blocks_k` | 每行 nbpr 个 partial 求和 | `(partial,y,nrows,nbpr)` |
 | `sigmoid_mul_k` | `y=x*sigmoid(g)` | `(y,x,g,n)` |
 | `l2norm_k` | 每 S 维 L2 归一化 | `(x,S,eps)`，grid=rows |
 | `rmsnorm_gated_k` | RMSNorm + sigmoid 门 | `(y,x,w,g,D,eps)`，grid=rows |
