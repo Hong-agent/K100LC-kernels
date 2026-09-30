@@ -61,6 +61,7 @@ Runtime.launch2d(name, gx, gy, wx, wy, argv)
 | `q8_0_dequant_k` | Q8_0 → f32 | `(w,y,nblocks,64)` |
 | `q4_0_dequant_k` | Q4_0 → f32 | `(w,y,nblocks,64)` |
 | `softmax_k` | 行 softmax（warp/row） | `(y,x,rows,cols,64)` |
+| `q6k_dequant_k` / `q6k_dequant` | Q6_K → f32（DSL 编译） | `(w,y,nblocks)` |
 | `sigmoid_mul_k` | `y=x*sigmoid(g)` | `(y,x,g,n)` |
 | `l2norm_k` | 每 S 维 L2 归一化 | `(x,S,eps)`，grid=rows |
 | `rmsnorm_gated_k` | RMSNorm + sigmoid 门 | `(y,x,w,g,D,eps)`，grid=rows |

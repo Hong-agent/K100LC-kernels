@@ -1,0 +1,26 @@
+def q6k_dequant(w: ptr[u8], y: ptr[f32], nblocks: u32):
+    b = gid()
+    if b < nblocks:
+        wb = b * 210
+        yb = b * 256
+        d = f16_to_f32(load16(w, wb + 208))
+        for half in range(0, 2):
+            sb = wb + 192 + half * 8
+            for l in range(0, 32):
+                ql0 = w[wb + half * 64 + l]
+                ql1 = w[wb + half * 64 + l + 32]
+                qh = w[wb + 128 + half * 32 + l]
+                q1 = s32(((ql0 & 15) | ((qh & 3) << 4)) - 32)
+                q2 = s32(((ql1 & 15) | (((qh >> 2) & 3) << 4)) - 32)
+                q3 = s32(((ql0 >> 4) | (((qh >> 4) & 3) << 4)) - 32)
+                q4 = s32(((ql1 >> 4) | (((qh >> 6) & 3) << 4)) - 32)
+                is_ = l >> 4
+                s0 = s8(w[sb + is_ + 0])
+                s1 = s8(w[sb + is_ + 2])
+                s2 = s8(w[sb + is_ + 4])
+                s3 = s8(w[sb + is_ + 6])
+                o = yb + half * 128
+                y[o + l] = d * f32(s0) * f32(q1)
+                y[o + 32 + l] = d * f32(s1) * f32(q2)
+                y[o + 64 + l] = d * f32(s2) * f32(q3)
+                y[o + 96 + l] = d * f32(s3) * f32(q4)

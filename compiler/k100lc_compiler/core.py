@@ -32,6 +32,9 @@ class CompileError(Exception):
     pass
 
 
+ELEM_SIZE = {"f32": 4, "u32": 4, "s32": 4, "u16": 2, "s16": 2, "u8": 1, "s8": 1}
+
+
 def _align(n: int, a: int) -> int:
     return (n + a - 1) // a * a
 
@@ -244,6 +247,12 @@ class CodeGen:
                     return "u32"
                 if n in ("f32", "u32", "s32"):
                     return n
+                if n == "load16":
+                    return "u32"
+                if n == "f16_to_f32":
+                    return "f32"
+                if n == "s8":
+                    return "s32"
         return "u32"
 
     # ---------------- 表达式 ----------------
@@ -268,7 +277,8 @@ class CodeGen:
         if isinstance(node, ast.BinOp):
             a, b = self.expr(node.left), self.expr(node.right)
             op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
-                  ast.LShift: "<<", ast.BitAnd: "&", ast.BitOr: "|"}.get(type(node.op))
+                  ast.LShift: "<<", ast.RShift: ">>",
+                  ast.BitAnd: "&", ast.BitOr: "|"}.get(type(node.op))
             if op is None:
                 raise CompileError(f"不支持的运算符 {type(node.op).__name__}")
             ty = "f32" if ("f32" in (a.ty, b.ty) and op in ("+", "-", "*", "/")) else \
@@ -322,16 +332,23 @@ class CodeGen:
             dst = self._alloc_tmp_s()
             m = {"+": "s_add_u32", "-": "s_sub_u32", "&": "s_and_b32",
                  "|": "s_or_b32", "^": "s_xor_b32", "*": "s_mul_i32"}
-            if op not in m:
+            if op == ">>":
+                self.emit(f"{'s_ashr_i32' if ty == 's32' else 's_lshr_b32'} "
+                          f"s{dst}, s{sa}, s{sb}")
+            elif op not in m:
                 raise CompileError(f"uniform 不支持 {op}")
-            self.emit(f"{m[op]} s{dst}, s{sa}, s{sb}")
+            else:
+                self.emit(f"{m[op]} s{dst}, s{sa}, s{sb}")
             return Val("s", dst, ty)
         av, bv = self.as_vreg(a), self.as_vreg(b)
         dst = self.alloc_tmp_v()
         m = {"+": "v_add_u32_e32", "-": "v_sub_u32_e32", "*": "v_mul_lo_u32",
              "&": "v_and_b32_e32", "|": "v_or_b32_e32", "^": "v_xor_b32_e32"}
         if op == "<<":
-            self.emit(f"v_lshlrev_b32_e32 v{dst}, v{av}, v{bv}")
+            self.emit(f"v_lshlrev_b32_e32 v{dst}, v{bv}, v{av}")
+        elif op == ">>":
+            self.emit(f"{'v_ashrrev_i32_e32' if ty == 's32' else 'v_lshrrev_b32_e32'} "
+                      f"v{dst}, v{bv}, v{av}")
         elif op in m:
             self.emit(f"{m[op]} v{dst}, v{av}, v{bv}")
         else:
@@ -376,6 +393,28 @@ class CodeGen:
         n = node.func.id
         if n == "gid":
             return self._gid()
+        if n == "load16":
+            ptr = self.expr(node.args[0])
+            if ptr.kind != "ptr":
+                raise CompileError("load16 第一个参数必须是指针")
+            off = Val("v", self.as_vreg(self.expr(node.args[1])), "u32")
+            lo, hi = self._addr(ptr, off, "u8")
+            r = self.alloc_tmp_v()
+            self.emit(f"global_load_ushort v{r}, v[{lo}:{hi}], off")
+            self.emit("s_waitcnt vmcnt(0)")
+            self.free_addr_pair()
+            return Val("v", r, "u32")
+        if n == "f16_to_f32":
+            v = self.as_vreg(self.expr(node.args[0]))
+            r = self.alloc_tmp_v()
+            self.emit(f"v_cvt_f32_f16_e32 v{r}, v{v}")
+            return Val("v", r, "f32")
+        if n == "s8":
+            v = self.as_vreg(self.expr(node.args[0]))
+            r = self.alloc_tmp_v()
+            self.emit(f"v_lshlrev_b32_e32 v{r}, 24, v{v}")
+            self.emit(f"v_ashrrev_i32_e32 v{r}, 24, v{r}")
+            return Val("v", r, "s32")
         if n == "tid":
             r = self._alloc_var_v()
             self.emit(f"v_mov_b32_e32 v{r}, v0")
@@ -391,6 +430,9 @@ class CodeGen:
             return Val("v", r, "u32")
         if n in ("f32", "u32", "s32"):
             v = self.expr(node.args[0])
+            if n in ("u32", "s32") and v.ty in ("u8", "s8", "u16", "s16", "u32", "s32"):
+                # 同宽整数只是类型视图，位模式不变
+                return Val("v", self.as_vreg(v), n)
             src = self.as_vreg(v)
             r = self.alloc_tmp_v()
             if n == "f32":
@@ -451,13 +493,18 @@ class CodeGen:
         return Val("v", r, "u32")
 
     # ---------------- 内存 ----------------
-    def _addr(self, ptr: Val, index: Val) -> tuple[int, int]:
+    def _addr(self, ptr: Val, index: Val, elem_ty: str = "f32") -> tuple[int, int]:
         if ptr.kind != "ptr":
             raise CompileError("索引的基址不是指针")
         idx = self.as_vreg(index)
         lo, hi = self.alloc_addr_pair()
         off = self.alloc_tmp_v()
-        self.emit(f"v_lshlrev_b32_e32 v{off}, 2, v{idx}")
+        esize = ELEM_SIZE.get(elem_ty, 4)
+        if esize == 1:
+            self.emit(f"v_mov_b32_e32 v{off}, v{idx}")
+        else:
+            shift = {2: 1, 4: 2}.get(esize, 2)
+            self.emit(f"v_lshlrev_b32_e32 v{off}, {shift}, v{idx}")
         self.emit(f"v_mov_b32_e32 v{lo}, s{ptr.reg}")
         self.emit(f"v_mov_b32_e32 v{hi}, s{ptr.reg + 1}")
         self.emit(f"v_add_co_u32_e32 v{lo}, vcc, v{lo}, v{off}")
@@ -473,9 +520,13 @@ class CodeGen:
             raise CompileError(f"{node.value.id} 不是指针")
         idx = self.expr(node.slice)
         et = ptr.ty.split(":", 1)[1]
-        lo, hi = self._addr(ptr, idx)
+        lo, hi = self._addr(ptr, idx, et)
         r = self.alloc_tmp_v()
-        self.emit(f"global_load_dword v{r}, v[{lo}:{hi}], off")
+        mn = {"f32": "global_load_dword", "u32": "global_load_dword",
+              "s32": "global_load_dword", "u16": "global_load_ushort",
+              "s16": "global_load_ushort", "u8": "global_load_ubyte",
+              "s8": "global_load_sbyte"}[et]
+        self.emit(f"{mn} v{r}, v[{lo}:{hi}], off")
         self.emit("s_waitcnt vmcnt(0)")
         self.free_addr_pair()
         return Val("v", r, et)
@@ -488,8 +539,13 @@ class CodeGen:
             raise CompileError(f"{node.value.id} 不是指针")
         idx = self.expr(node.slice)
         src = self.as_vreg(value)
-        lo, hi = self._addr(ptr, idx)
-        self.emit(f"global_store_dword v[{lo}:{hi}], v{src}, off")
+        et = ptr.ty.split(":", 1)[1]
+        lo, hi = self._addr(ptr, idx, et)
+        mn = {"f32": "global_store_dword", "u32": "global_store_dword",
+              "s32": "global_store_dword", "u16": "global_store_short",
+              "s16": "global_store_short", "u8": "global_store_byte",
+              "s8": "global_store_byte"}[et]
+        self.emit(f"{mn} v[{lo}:{hi}], v{src}, off")
         self.emit("s_waitcnt vmcnt(0)")
         self.free_addr_pair()
 

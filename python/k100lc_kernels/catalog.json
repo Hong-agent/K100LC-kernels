@@ -8419,6 +8419,95 @@
    "private_segment": 0
   },
   {
+   "name": "q6k_dequant",
+   "lookup": "q6k_dequant",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "hidden_block_count_x"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "hidden_block_count_y"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "hidden_block_count_z"
+    },
+    {
+     "off": 36,
+     "size": 2,
+     "kind": "hidden_group_size_x"
+    },
+    {
+     "off": 38,
+     "size": 2,
+     "kind": "hidden_group_size_y"
+    },
+    {
+     "off": 40,
+     "size": 2,
+     "kind": "hidden_group_size_z"
+    },
+    {
+     "off": 42,
+     "size": 2,
+     "kind": "hidden_remainder_x"
+    },
+    {
+     "off": 44,
+     "size": 2,
+     "kind": "hidden_remainder_y"
+    },
+    {
+     "off": 46,
+     "size": 2,
+     "kind": "hidden_remainder_z"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "hidden_global_offset_x"
+    },
+    {
+     "off": 56,
+     "size": 8,
+     "kind": "hidden_global_offset_y"
+    },
+    {
+     "off": 64,
+     "size": 8,
+     "kind": "hidden_global_offset_z"
+    },
+    {
+     "off": 72,
+     "size": 2,
+     "kind": "hidden_grid_dims"
+    }
+   ],
+   "kernarg_size": 80,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
    "name": "q8_0_dequant_k",
    "lookup": "q8_0_dequant_k",
    "args": [

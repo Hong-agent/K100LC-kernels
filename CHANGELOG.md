@@ -22,3 +22,5 @@
 - 新增 `q8_0_dequant_k` 与 `q4_0_dequant_k` 主流 GGUF 量化 GPU 解码；
   内核总数 94，均与参考解码 bit-exact。
 - 新增 `softmax_k`（warp-per-row + LDS 树形归约）；内核总数 95。
+- 用编译器 DSL 生成 `q6k_dequant`（Q6_K → f32），与参考解码 bit-exact；
+  内核总数 96。
