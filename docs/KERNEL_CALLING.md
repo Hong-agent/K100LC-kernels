@@ -369,7 +369,7 @@ fm_download(y_host, y, n * 4);
 | `silu_mul_k` | `(y, a, b, n)` | `y = silu(a) * b`；grid-stride；`ceil(n/64)`，wg=64 |
 | `gelu_mul_k` | `(y, gate, up, n, 64)` | `ceil(n/64)`，wg=64；第 5 个参数固定 64 |
 | `sigmoid_mul_k` | `(y, x, g, n)` | `y = x * sigmoid(g)`——注意与 `silu_mul_k` 相反，门控在**第 3 个**参数上；grid-stride；`ceil(n/64)`，wg=64 |
-| `concat2_k` | `(y, a, b, pre, n)` | **按 `pre` 分块交替交织**（不是单纯拼接）：`q = i//pre, r = i%pre, y[i] = (q 偶 ? a : b)[(q//2)*pre + r]`；grid-stride；`ceil(n/64)`，wg=64 |
+| `concat2_k` | `(y, a, b, pre, n)` | **按 `pre` 分块交替交织**（不是单纯拼接）：`q = i//pre, r = i%pre, y[i] = (q 偶 ? a : b)[(q//2)*pre + r]`。**`n` 是半长**：`a`/`b` 各 `n` 个元素、`y` 必须给 **2n**（每个线程写 2 个，按 `n` 给会写穿到相邻缓冲）；grid = `ceil(n/64)`，wg=64 |
 | `l2norm_k` | `(x, S, eps)` | grid = 行数，wg=64；原地归一化 |
 
 ```python

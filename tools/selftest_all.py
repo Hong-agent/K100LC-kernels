@@ -179,26 +179,28 @@ def t_add_inplace(ctx: Ctx):
 
 @case("elementwise", "concat2_k")
 def t_concat2(ctx: Ctx):
-    # 实测语义：**按 pre 分块交替交织**，不是单纯拼接
-    #   q = i // pre, r = i % pre
-    #   out[i] = (q 偶 ? a : b)[(q // 2) * pre + r]
-    #
-    # 注意：**只在中小尺寸可靠**。`pre=32, n=1024` 时同一组参数在不同显存
-    # 布局下会给出不同结果（有时全对、有时从下标 0 或 384 起错 64~192 个）
-    # ——说明内部那次 `i // pre` 的魔法除法范围不够，越界读了相邻显存。
-    # 所以这个用例只钉小尺寸（n=32）已确认的确定性行为。
+    """实测契约（用探针钉死）：**按 `pre` 分块交替交织**，不是单纯拼接。
+
+        q = i // pre, r = i % pre
+        out[i] = (q 偶 ? a : b)[(q // 2) * pre + r]      对 i ∈ [0, 2n)
+
+    关键是 **第 5 个参数 `n` 是「半长」**：`a` / `b` 各 `n` 个元素，
+    **输出要 `2n` 个**（每个线程写 2 个）。按 `n` 给输出缓冲会写穿到相邻
+    缓冲，表现为「同一组参数复跑结果不同」（取决于隔壁放了什么）。
+    grid = `ceil(n/64)`、wg = 64。
+    """
     pre, n = 8, 32
     rng = np.random.default_rng(3)
     a = rng.standard_normal(n).astype(np.float32)
     b = rng.standard_normal(n).astype(np.float32)
-    op, ap, bp = ctx.out(n), ctx.buf(a), ctx.buf(b)
+    op, ap, bp = ctx.out(2 * n), ctx.buf(a), ctx.buf(b)
     ctx.launch("concat2_k", (n + 63) // 64, 64, [op, ap, bp, pre, n])
-    ref = np.empty(n, dtype=np.float32)
-    for i in range(n):
+    ref = np.empty(2 * n, dtype=np.float32)
+    for i in range(2 * n):
         q, r = divmod(i, pre)
         src = a if q % 2 == 0 else b
         ref[i] = src[(q // 2) * pre + r]
-    return judge(np.abs(ctx.get(op, n) - ref).max(), ref, atol=0.0, rtol=0.0)
+    return judge(np.abs(ctx.get(op, 2 * n) - ref).max(), ref, atol=0.0, rtol=0.0)
 
 
 def _silu(x):

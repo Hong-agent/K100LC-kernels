@@ -57,7 +57,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 |---|---|---|---|
 | C1 | 自检覆盖其余内核 | 进行中 | **全包约 84/122**：W4 解码全通路、激活量化 4 件套、`split_qkv_k`、NVFP4 25/27（`nvfp4_quant_act` + 24 个 gemv 模板变体）、ViT 4/7（`vit_bias`/`vit_bias_s`/`vit_gelu`/`vit_ln`）。待补：Attention/KV（18 个，全部无用例、语义要从汇编逆向）、ViT 的 `vit_rope_kernel`/`vit_linear_f16_kernel`/`vit_attn_kernel`、序列/卷积、NVFP4 的 2 个预填充 GEMM（grid 约定未定）、`quant_rows_a8_k`、`rope_k`。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
 | C5 | `vit_bias_s_kernel` 的 period 缺陷 | 待办 | `i % period` 用范围有限的魔法除法：只有 `period == dim` 可靠，其它周期在 `n` 稍大后从某个下标起算错（`dim=16` 时 period=2/3 从 24、4 从 48、8 从 96 起错）。修它要改那段手写汇编 |
-| C6 | `concat2_k` 越界 | 待办（较严重） | `pre=32, n=1024` 时**同参数复跑结果不同**（有时全对、有时从下标 0 或 384 起错 64~192 个），说明 `i // pre` 的魔法除法越界读了相邻显存。同一类问题的通用修法：magic 交给主机算（`div_magic` 会校验范围）或换范围安全的除法序列；在修好前不要在 `n` 稍大时用它 |
+| C6 | `concat2_k` 的参数语义 | 已完成（更正） | 不是缺陷：第 5 个参数 `n` 是**半长**，内核写 `2n` 个元素；按 `n` 给输出会写穿到相邻缓冲，表现为「同参数复跑结果不同」。用例已按 2n 完整对账，README 与 `KERNEL_CALLING.md` 都补了说明 |
 | C2 | 新量化格式 | 待办 | Q3_K / Q2_K / MXFP4 / FP8 等的 `*_dot_k` |
 | C3 | 采样算子 | 待办 | top-p / repetition penalty 等目前只有主机侧 numpy |
 | C4 | `concat2_k` 语义澄清 | 已完成 | 实测是「按 `pre` 分块交替交织」，已写进 `docs/KERNEL_CALLING.md`；如需真拼接要另加内核 |
