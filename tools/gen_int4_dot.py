@@ -118,19 +118,29 @@ def gen_int4_dot_asm() -> str:
     em("v_mov_b32_e32 v26, 0xc1000000")   # -8.0f（offset-binary 的零点）
 
     # 16 个字 × 8 个 4bit：先 Σ(码-8)*x，再整块乘一次尺度
-    for d in range(BLOCK_WORDS):
-        em(f"global_load_dwordx4 v[100:103], v[6:7], off offset:{32 * d}")
-        em(f"global_load_dwordx4 v[104:107], v[6:7], off offset:{32 * d + 16}")
+    #
+    # 激活按 4 个字一组批量预载：原来每个字 2 条 dwordx4 后面各跟一条
+    # `s_waitcnt vmcnt(0)`（整块 16 次全排空），改成每 4 个字发 8 条载入、
+    # 只等一次，访存并行度提高一个量级。XREG 起 v128 这一段没有别的用途。
+    XREG = 128
+    for g in range(BLOCK_WORDS // 4):
+        for i in range(8):
+            em(f"global_load_dwordx4 v[{XREG + 4 * i}:{XREG + 4 * i + 3}], v[6:7], "
+               f"off offset:{16 * (8 * g + i)}")
         em("s_waitcnt vmcnt(0)")
-        for j in range(8):
-            if j == 0:
-                em(f"v_and_b32_e32 v27, 0x0f, v{8 + d}")
-            else:
-                em(f"v_lshrrev_b32_e32 v27, {4 * j}, v{8 + d}")
-                em("v_and_b32_e32 v27, 0x0f, v27")
-            em("v_cvt_f32_u32_e32 v27, v27")
-            em("v_add_f32_e32 v27, v26, v27")
-            em(f"v_fma_f32 v{DOT_ACC[j % 4]}, v27, v{100 + j}, v{DOT_ACC[j % 4]}")
+        for d in range(4 * g, 4 * g + 4):
+            lo = XREG + 4 * (2 * d - 8 * g)
+            hi = lo + 4
+            for j in range(8):
+                if j == 0:
+                    em(f"v_and_b32_e32 v27, 0x0f, v{8 + d}")
+                else:
+                    em(f"v_lshrrev_b32_e32 v27, {4 * j}, v{8 + d}")
+                    em("v_and_b32_e32 v27, 0x0f, v27")
+                em("v_cvt_f32_u32_e32 v27, v27")
+                em("v_add_f32_e32 v27, v26, v27")
+                xr = lo + j if j < 4 else hi + j - 4
+                em(f"v_fma_f32 v{DOT_ACC[j % 4]}, v27, v{xr}, v{DOT_ACC[j % 4]}")
     for r in DOT_ACC:
         em(f"v_mul_f32_e32 v{r}, v{r}, v25")
     dot_tail(L)

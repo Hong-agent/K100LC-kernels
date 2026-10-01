@@ -48,7 +48,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 | B4 | 融合算子 | 待办 | RMSNorm+量化、rope+KV 写入、split_qkv+norm（后者已有 `k_gdn_split_norm_k`）等 |
 | B5 | MoE 专家并行度 | 待办 | 分桶路径已有 2.71×；继续做专家内并行 / 权重常驻 |
 | B6 | W4 GEMV 的 threads 约束 | 已完成 | 内核把「4 warp/组、1 行/warp」写死，非 256 会静默算错；`W4Runner` 现在直接拒绝 |
-| B7 | 融合点积内核带宽（12~20% 峰值） | 待办 | `*_dot_k` 每个 work-item 只处理一个块：16 次 `global_load_ubyte` + 每次 4 字节一个 `s_waitcnt vmcnt(0)`，几乎无访存并行度。候选：按 2/8 块成组（36/144 字节刚好能对齐成 dword/dwordx4 载入）、去掉中间 waitcnt。相对地，W4A8/W4A4 通路同一份 0.5 B/权重能跑到 555 GB/s，是 3~5 倍差距 |
+| B7 | 融合点积内核带宽 | 部分完成 | v1.5.0 把「每个激活载入后紧跟 `s_waitcnt vmcnt(0)`」改成整轮批量发载入：`iq4nl`/`q4_0`/`q8_0`/`q4k`/`q5k`/`int4_dot` 六个内核 MoE 口径提升 1.4~3.3 倍；剩 `q2_0`/`q6k`/`iq4xs`/`iq2s`/`iq3s`/`iq3xxs` 仍是老写法（寄存器不够，需要两级预取） |
 
 ### C. 特性覆盖
 

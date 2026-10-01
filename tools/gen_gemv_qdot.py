@@ -98,6 +98,15 @@ def dot_args(n_tables: int = 0) -> list[dict]:
     return a
 
 
+# 融合点积里「批量预载激活」用的寄存器基址。
+#
+# 原来的写法是每个 `global_load_dwordx4` 后面紧跟一条 `s_waitcnt vmcnt(0)`，
+# 等于让一个 work-item 串行等待 8~64 次访存（iq4nl 一个 work-item 有 12 次
+# 全排空）。改成「先把这一轮的 x 全部发出去、最后只等一次」之后，实测
+# iq4nl_dot_k 快 2.7 倍。v128 起这一段没有别的用途，够放 8 个 dwordx4。
+XREG = 128
+
+
 def dot_kernarg(n_tables: int = 0) -> int:
     return ((48 + 8 * n_tables) + 20 + 7) // 8 * 8
 
@@ -268,9 +277,6 @@ def gen_iq4nl_dot_asm() -> str:
     em(f"v_mov_b32_e32 v11, {LUT_HI_HI:#010x}")
     em(f"v_mov_b32_e32 v12, {LUT_HI_LO:#010x}")
     em("v_mov_b32_e32 v13, 0x0000ff00")
-    em("global_load_ushort v8, v[4:5], off")
-    em("s_waitcnt vmcnt(0)")
-    em("v_cvt_f32_f16_e32 v8, v8")                 # 块尺度 d
 
     def lut(src: str) -> None:
         em(f"v_and_b32_e32 v28, 0x07070707, {src}")
@@ -281,35 +287,48 @@ def gen_iq4nl_dot_asm() -> str:
         em("v_perm_b32 v28, v3, v13, v27")
         em("v_bfi_b32 v29, v28, v26, v25")
 
-    def fma4(off: int) -> None:
-        em(f"global_load_dwordx4 v[44:47], v[6:7], off offset:{off}")
-        em("s_waitcnt vmcnt(0)")
+    def fma4(xreg: int) -> None:
         for i in range(4):
             em(f"v_lshrrev_b32_e32 v30, {8 * i}, v29")
             em("v_lshlrev_b32_e32 v30, 24, v30")
             em("v_ashrrev_i32_e32 v30, 24, v30")
             em("v_cvt_f32_i32_e32 v30, v30")
             em("v_mul_f32_e32 v30, v8, v30")
-            em(f"v_fma_f32 v{DOT_ACC[i]}, v30, v{44 + i}, v{DOT_ACC[i]}")
+            em(f"v_fma_f32 v{DOT_ACC[i]}, v30, v{xreg + i}, v{DOT_ACC[i]}")
 
+    # ---- 批量发载入：先把 4 组 qs 字节（每字节一条）与 8 个 x dwordx4 全部
+    # 发出去，再一次性 `s_waitcnt vmcnt(0)`。原来的写法是「每 4 字节等一次 +
+    # 每个 dwordx4 等一次」，一个 work-item 要 12 次全排空，几乎没有访存并行度。
+    BYTE_REG = (14, 32, 36, 40)          # 4 组 qs 字节的起始寄存器
+    XREG = 160                           # 8 个 dwordx4 → v160..v191
+    em("global_load_ushort v8, v[4:5], off")
     for j in range(4):
         for b in range(4):
-            em(f"global_load_ubyte v{14 + b}, v[4:5], off offset:{2 + 4 * j + b}")
-        em("s_waitcnt vmcnt(0)")
-        em("v_lshlrev_b32_e32 v22, 8, v15")
-        em("v_or_b32_e32 v22, v14, v22")
-        em("v_lshlrev_b32_e32 v23, 8, v17")
-        em("v_or_b32_e32 v23, v16, v23")
+            em(f"global_load_ubyte v{BYTE_REG[j] + b}, v[4:5], off "
+               f"offset:{2 + 4 * j + b}")
+    for i in range(8):
+        off = 16 * i if i < 4 else 64 + 16 * (i - 4)
+        em(f"global_load_dwordx4 v[{XREG + 4 * i}:{XREG + 4 * i + 3}], "
+           f"v[6:7], off offset:{off}")
+    em("s_waitcnt vmcnt(0)")
+    em("v_cvt_f32_f16_e32 v8, v8")                 # 块尺度 d
+
+    for j in range(4):
+        b0 = BYTE_REG[j]
+        em(f"v_lshlrev_b32_e32 v22, 8, v{b0 + 1}")
+        em(f"v_or_b32_e32 v22, v{b0}, v22")
+        em(f"v_lshlrev_b32_e32 v23, 8, v{b0 + 3}")
+        em(f"v_or_b32_e32 v23, v{b0 + 2}, v23")
         em("v_lshlrev_b32_e32 v23, 16, v23")
         em("v_or_b32_e32 v18, v22, v23")            # qs dword j
         em("v_and_b32_e32 v24, 0x0f0f0f0f, v18")
         lut("v24")
-        fma4(16 * j)
+        fma4(XREG + 4 * j)                     # 偏移 16*j 的那一组
         em("v_and_b32_e32 v24, 0xf0f0f0f0, v18")
         em("v_lshrrev_b32_e32 v24, 4, v24")
         em("v_and_b32_e32 v24, 0x0f0f0f0f, v24")
         lut("v24")
-        fma4(64 + 16 * j)
+        fma4(XREG + 16 + 4 * j)                # 偏移 64+16*j 的那一组
 
     dot_tail(L)
     return "\n".join(L) + "\n"
@@ -792,28 +811,28 @@ def gen_q4_0_dot_asm() -> str:
     em("global_load_ushort v8, v[4:5], off")
     for b in range(16):
         em(f"global_load_ubyte v{20 + b}, v[4:5], off offset:{2 + b}")
+    for i in range(8):                     # 8 个 dwordx4 一次发出去
+        em(f"global_load_dwordx4 v[{XREG + 4 * i}:{XREG + 4 * i + 3}], v[6:7], "
+           f"off offset:{16 * i}")
     em("s_waitcnt vmcnt(0)")
     em("v_cvt_f32_f16_e32 v8, v8")
     em("v_mov_b32_e32 v36, 8")
     for q in range(4):
         # 低半字节 → 元素 4q..4q+3
-        em(f"global_load_dwordx4 v[40:43], v[6:7], off offset:{16 * q}")
-        em("s_waitcnt vmcnt(0)")
         for k in range(4):
             _emit_nibble(L, "v38", f"v{20 + 4 * q + k}", 0)
             em("v_sub_u32_e32 v38, v38, v36")
             em("v_cvt_f32_i32_e32 v38, v38")
             em("v_mul_f32_e32 v38, v38, v8")
-            em(f"v_fma_f32 v{DOT_ACC[k]}, v38, v{40 + k}, v{DOT_ACC[k]}")
+            em(f"v_fma_f32 v{DOT_ACC[k]}, v38, v{XREG + 4 * q + k}, v{DOT_ACC[k]}")
         # 高半字节 → 元素 16+4q..16+4q+3
-        em(f"global_load_dwordx4 v[40:43], v[6:7], off offset:{4 * (16 + 4 * q)}")
-        em("s_waitcnt vmcnt(0)")
         for k in range(4):
             _emit_nibble(L, "v38", f"v{20 + 4 * q + k}", 4)
             em("v_sub_u32_e32 v38, v38, v36")
             em("v_cvt_f32_i32_e32 v38, v38")
             em("v_mul_f32_e32 v38, v38, v8")
-            em(f"v_fma_f32 v{DOT_ACC[k]}, v38, v{40 + k}, v{DOT_ACC[k]}")
+            em(f"v_fma_f32 v{DOT_ACC[k]}, v38, v{XREG + 16 + 4 * q + k}, "
+               f"v{DOT_ACC[k]}")
     dot_tail(L)
     return "\n".join(L) + "\n"
 
@@ -828,19 +847,21 @@ def gen_q8_0_dot_asm() -> str:
     dot_xaddr(L, 7)                                # BLK=32 → *128 B
     _emit_waddr(L, 34)
     em("global_load_ushort v8, v[4:5], off")
+    for i in range(8):                     # 8 个 dwordx4 一次发出去
+        em(f"global_load_dwordx4 v[{XREG + 4 * i}:{XREG + 4 * i + 3}], v[6:7], "
+           f"off offset:{16 * i}")
     em("s_waitcnt vmcnt(0)")
     em("v_cvt_f32_f16_e32 v8, v8")
     for q in range(8):
         for k in range(4):
             em(f"global_load_ubyte v{20 + k}, v[4:5], off offset:{2 + 4 * q + k}")
-        em(f"global_load_dwordx4 v[40:43], v[6:7], off offset:{16 * q}")
         em("s_waitcnt vmcnt(0)")
         for k in range(4):
             em(f"v_lshlrev_b32_e32 v30, 24, v{20 + k}")
             em("v_ashrrev_i32_e32 v30, 24, v30")
             em("v_cvt_f32_i32_e32 v30, v30")
             em("v_mul_f32_e32 v30, v30, v8")
-            em(f"v_fma_f32 v{DOT_ACC[k]}, v30, v{40 + k}, v{DOT_ACC[k]}")
+            em(f"v_fma_f32 v{DOT_ACC[k]}, v30, v{XREG + 4 * q + k}, v{DOT_ACC[k]}")
     dot_tail(L)
     return "\n".join(L) + "\n"
 
@@ -870,16 +891,18 @@ def gen_q4k_dot_asm() -> str:
         _emit_k_scale(L, 2 * s + 1, "v94", "v95")
         for half, a_reg, nb_reg in ((0, "v92", "v93"), (1, "v94", "v95")):
             xbase = 256 * s + 128 * half
-            for l0 in range(0, 32, 4):
-                em(f"global_load_dwordx4 v[40:43], v[6:7], off "
-                   f"offset:{xbase + 4 * l0}")
-                em("s_waitcnt vmcnt(0)")
+            for idx, l0 in enumerate(range(0, 32, 4)):
+                em(f"global_load_dwordx4 v[{XREG + 4 * idx}:{XREG + 4 * idx + 3}], "
+                   f"v[6:7], off offset:{xbase + 4 * l0}")
+            em("s_waitcnt vmcnt(0)")
+            for idx, l0 in enumerate(range(0, 32, 4)):
                 qreg = f"v{20 + l0 // 4}"
                 for k in range(4):
                     _emit_nibble(L, "v30", qreg, 8 * k + 4 * half)
                     em("v_cvt_f32_u32_e32 v30, v30")
                     em(f"v_fma_f32 v30, v30, {a_reg}, {nb_reg}")
-                    em(f"v_fma_f32 v{DOT_ACC[k]}, v30, v{40 + k}, v{DOT_ACC[k]}")
+                    em(f"v_fma_f32 v{DOT_ACC[k]}, v30, "
+                       f"v{XREG + 4 * idx + k}, v{DOT_ACC[k]}")
     dot_tail(L)
     return "\n".join(L) + "\n"
 
@@ -911,10 +934,11 @@ def gen_q5k_dot_asm() -> str:
         _emit_k_scale(L, 2 * s + 1, "v94", "v95")
         for half, a_reg, nb_reg in ((0, "v92", "v93"), (1, "v94", "v95")):
             xbase = 256 * s + 128 * half
-            for l0 in range(0, 32, 4):
-                em(f"global_load_dwordx4 v[40:43], v[6:7], off "
-                   f"offset:{xbase + 4 * l0}")
-                em("s_waitcnt vmcnt(0)")
+            for idx, l0 in enumerate(range(0, 32, 4)):
+                em(f"global_load_dwordx4 v[{XREG + 4 * idx}:{XREG + 4 * idx + 3}], "
+                   f"v[6:7], off offset:{xbase + 4 * l0}")
+            em("s_waitcnt vmcnt(0)")
+            for idx, l0 in enumerate(range(0, 32, 4)):
                 qreg = f"v{20 + l0 // 4}"
                 qhreg = f"v{80 + l0 // 4}"
                 for k in range(4):
@@ -929,7 +953,8 @@ def gen_q5k_dot_asm() -> str:
                     em("v_or_b32_e32 v30, v30, v31")
                     em("v_cvt_f32_u32_e32 v30, v30")
                     em(f"v_fma_f32 v30, v30, {a_reg}, {nb_reg}")
-                    em(f"v_fma_f32 v{DOT_ACC[k]}, v30, v{40 + k}, v{DOT_ACC[k]}")
+                    em(f"v_fma_f32 v{DOT_ACC[k]}, v30, "
+                       f"v{XREG + 4 * idx + k}, v{DOT_ACC[k]}")
     dot_tail(L)
     return "\n".join(L) + "\n"
 
