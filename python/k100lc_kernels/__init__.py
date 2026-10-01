@@ -8,10 +8,10 @@ from .quant import (ct_int4_to_rt4, ct_int4_to_twos_complement,
                     dequant_int4_group128, int4_scale_group_first_f32,
                     pack_int4_group128)
 from .rt4 import RT4File, RT4Tensor, W4Runner
-from .runtime import Runtime
+from .runtime import LaunchPlan, Runtime
 
 __all__ = [
-    "Runtime", "kernels", "info",
+    "Runtime", "LaunchPlan", "kernels", "info",
     "RT4File", "RT4Tensor", "W4Runner",
     "Workspace", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
     "Attention", "FlashAttention", "TransformerLayer",

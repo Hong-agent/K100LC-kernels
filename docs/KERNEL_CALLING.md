@@ -679,6 +679,11 @@ rt.launch("rope_apply_k", rows, 64, [py, px, pcos, psin, rows, dim, tsh, tbase])
 #   grid = ceil(rows/64) * (dim/64)，cshift = log2(dim/64)（要求 dim%64==0 且是 2 的幂）
 rt.launch("vt_scatter_k", ((rows + 63) // 64) * (dim // 64), 64,
           [pvt, pv, rows, dim, dim, max_len, y0, cshift])
+# 追加 KV 时更省的一条：K 转置 + V 按行拷贝**一个 launch 做完**
+#   vt[d*ystride + y0 + t] = k[t*kstride + d] ；vc[(y0+t)*dim + d] = v[t*vstride + d]
+#   合起来是为了让整个追加都是 launch（能进 batch()/LaunchPlan）
+rt.launch("vt_scatter_v_k", ((rows + 63) // 64) * (dim // 64), 64,
+          [pvt, pvc, pk, pv, rows, dim, dim, dim, max_len, y0, cshift])
 ```
 
 长行（整行长度 ≥ 2048）的 **softmax 分块**四件套 + 输出侧归一化

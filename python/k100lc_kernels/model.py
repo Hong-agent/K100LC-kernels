@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .runtime import Runtime
+from .runtime import LaunchPlan, Runtime
 
 __all__ = [
     "cdiv", "div_magic", "Workspace",
@@ -980,15 +980,32 @@ class FlashAttention:
                         self.max_len, off, cshift])
 
     def append_device(self, k_dev: int, v_dev: int, rows: int) -> None:
-        """追加 `rows` 个 token：K 转置进 `Kt`，V 行主序直接拷。"""
+        """追加 `rows` 个 token：K 转置进 `Kt`，V 行主序拷进 `V`。
+
+        优先用 `vt_scatter_v_k`（**一个** launch 同时做转置和拷贝）——这样整个
+        追加都是 launch，能跟其它 launch 一起进 `Runtime.batch()`；只有旧 hsaco
+        里没有这个内核时才退回「转置 + `copy_dev`」两步。
+        """
         rows = int(rows)
         if self.length + rows > self.max_len:
             raise ValueError(f"KV 溢出：{self.length}+{rows} > {self.max_len}")
         off = self.length
-        self._copy_k(k_dev, off, rows)
-        self.rt.copy_dev(self.v + off * self.dim * 4, int(v_dev),
-                         rows * self.dim * 4)
+        if self.rt.has("vt_scatter_v_k") and self._pitch_ok():
+            cshift = (self.dim // 64).bit_length() - 1
+            ntile = cdiv(rows, 64) * (self.dim // 64)
+            self.rt.launch("vt_scatter_v_k", ntile, 64,
+                           [self.kt, self.v, int(k_dev), int(v_dev), rows,
+                            self.dim, self.dim, self.dim, self.max_len, off,
+                            cshift])
+        else:
+            self._copy_k(k_dev, off, rows)
+            self.rt.copy_dev(self.v + off * self.dim * 4, int(v_dev),
+                             rows * self.dim * 4)
         self.length += rows
+
+    def _pitch_ok(self) -> bool:
+        return (self.dim % 64 == 0
+                and (self.dim // 64) & (self.dim // 64 - 1) == 0)
 
     def append(self, k: np.ndarray, v: np.ndarray) -> None:
         k = np.ascontiguousarray(k, dtype=np.float32).reshape(-1, self.dim)
@@ -1110,15 +1127,47 @@ class TransformerLayer:
         self.act = SwiGLU(rt, ws, tag + ".act")
         self.down = F32Linear(rt, dim, ffn, w_down, ws, tag + ".down")
         self.h = ws.buffer(tag + ".h", dim * 4)
-        self.q = ws.buffer(tag + ".q", dim * 4)
-        self.k = ws.buffer(tag + ".k", dim * 4)
+        # q/k 在 qkv 输出里是相连的两段，RoPE 一次扫 2*n_heads 行就都做了
+        self.qk = ws.buffer(tag + ".qk", 2 * dim * 4)
         self.acc = ws.buffer(tag + ".act", max(ffn, dim) * 4)
         self.tsh = n_heads.bit_length() - 1
         self.length = 0
+        self._plan = None
+        self._plan_idx: dict[str, int] = {}
+
+    def _plan_locate(self, calls: list) -> dict[str, int]:
+        """在录下来的调用序列里定位需要打补丁的记录（按内核名）。"""
+        want = {"rope_apply_k": "rope", "vt_scatter_v_k": "append",
+                "flash_dec_part_k": "part", "flash_dec_comb_k": "comb"}
+        idx = {}
+        for i, (kernel, _g, _w, _a) in enumerate(calls):
+            if kernel in want and want[kernel] not in idx:
+                idx[want[kernel]] = i
+        if self.rt.has("vt_scatter_v_k") and "append" not in idx:
+            idx["append"] = -1
+        return idx
+
+    def _patch_plan(self, pos: int) -> None:
+        """逐 token 变化的量：RoPE 表行、KV 追加列偏移、注意力长度/分块/grid。"""
+        plan, idx = self._plan, self._plan_idx
+        if "rope" in idx:
+            plan.set_arg(idx["rope"], 7, int(pos))              # tbase
+        if idx.get("append", -1) >= 0:
+            plan.set_arg(idx["append"], 9, int(self.length))    # y0
+        if "part" in idx:
+            pad, nsplit, _R = self.attn.plan(self.length + 1)
+            plan.set_arg(idx["part"], 6, self.length + 1)       # n_kv
+            plan.set_arg(idx["part"], 8, pad)
+            plan.set_arg(idx["part"], 10, nsplit.bit_length() - 1)
+            plan.set_grid(idx["part"], self.n_heads * nsplit)
+        if "comb" in idx:
+            _, nsplit, _R = self.attn.plan(self.length + 1)
+            plan.set_arg(idx["comb"], 5, nsplit)
 
     def reset(self) -> None:
         self.attn.reset()
         self.length = 0
+        self._plan = None
 
     def forward_device(self, x_dev: int, pos: int, sync: bool = False) -> int:
         """跑一个 token：`x_dev` 是 `[dim]`，返回残差流 `h` 的设备指针。"""
@@ -1126,15 +1175,39 @@ class TransformerLayer:
         if self.length >= self.max_len:
             raise ValueError("KV 缓存满")
         rt.copy_dev(self.h, int(x_dev), self.dim * 4)
+        # 第一个 token：边跑边把这一层的 launch 序列记下来（顺序、grid、参数），
+        # 之后每个 token 只打几个补丁（位置 / KV 列偏移 / 长度与分块）再一次性
+        # 重放——逐 token 重走 Python 路径实测每 token 要 ~0.27 ms，是这条路线的
+        # 主要开销；录成 plan 后每 token 只剩几次赋值 + 一次投递。
+        if self._plan is None:
+            with rt.batch():
+                h = self._forward_batched(rt, x_dev, pos)
+                calls = [(k, g, w, list(a)) for k, g, w, a, _n in rt._batch]
+            self._plan = LaunchPlan(rt, calls)
+            self._plan_idx = self._plan_locate(calls)
+            rt._batch = None
+            if sync:
+                rt.sync()
+            return h
+        self._patch_plan(pos)
+        self._plan.run()
+        # 重放路径里 append/kernel 序列是录下来的，长度得自己往前走
+        self.length += 1
+        self.attn.length = self.length
+        if sync:
+            rt.sync()
+        return self.h
+
+    def _forward_batched(self, rt, x_dev: int, pos: int) -> int:
         n1 = self.norm1.forward_device(self.h, 1, sync=False)
         qkv = self.qkv.forward_device(n1, 1, sync=False)
-        q = self.rope.forward_device(qkv, self.n_heads, pos=pos,
-                                     out_dev=self.q, tsh=self.tsh)
-        k = self.rope.forward_device(qkv + self.dim * 4, self.n_heads, pos=pos,
-                                     out_dev=self.k, tsh=self.tsh)
-        self.attn.append_device(k, qkv + 2 * self.dim * 4, 1)
+        # [q|k] 一次做完 RoPE：rows = 2*n_heads、tsh 再多 1 位 → 两段的头共用
+        # 同一个表行（tbase = 位置），省掉一次 launch
+        qk = self.rope.forward_device(qkv, 2 * self.n_heads, pos=pos,
+                                      out_dev=self.qk, tsh=self.tsh + 1)
+        self.attn.append_device(qk + self.dim * 4, qkv + 2 * self.dim * 4, 1)
         self.length += 1
-        attn = self.attn.forward_device(q)
+        attn = self.attn.forward_device(qk)
         o = self.o.forward_device(attn, 1, sync=False)
         rt.launch("add_inplace_k", cdiv(self.dim, 64), 64,
                   [self.h, o, self.dim])
@@ -1145,8 +1218,6 @@ class TransformerLayer:
         d = self.down.forward_device(act, 1, sync=False)
         rt.launch("add_inplace_k", cdiv(self.dim, 64), 64,
                   [self.h, d, self.dim])
-        if sync:
-            rt.sync()
         return self.h
 
     def forward(self, x: np.ndarray, pos: int, sync: bool = True):

@@ -100,6 +100,10 @@ inline void hsart_fill_arg(const RtKernel* k, size_t idx, char* kernarg, size_t 
 
 const RtKernel* hsart_lookup(const char* name);
 
+// 批量投递（fm_engine 转发）：plan 每条 = [kernel_id, grid, wg, nargs, argv...]
+int hsart_kernel_id(const char* name);
+int hsart_launch_batch(const uint64_t* plan, int nrec);
+
 template <class... A>
 inline void hsart_launch(const char* name, dim3 grid, dim3 block, int smem, int stream, A... args) {
     (void)stream;                        // 全部走单队列（默认流）

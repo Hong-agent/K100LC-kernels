@@ -507,6 +507,129 @@ static void dispatch_packet(uint64_t kobj, const char* dbg_name, dim3 grid, dim3
     if (g_pending < N_SLOT) g_pending++;
 }
 
+// ---------------- 批量投递 ----------------
+// 关键点：**门铃（doorbell）只敲一次**。实测一次 doorbell 的 MMIO 写就要几微秒，
+// 逐条 launch 时它是每次的大头；批量时把 N 个包填进队列、最后 store 一次 write
+// index + 敲一次门铃，硬件会把索引以内的包全部取走。
+//
+// `packet_fill` 只填包（并推进 *widx），`packet_publish` 提交并敲门铃。
+static bool packet_fill(uint64_t kobj, const char* dbg_name, uint32_t grid_wg,
+                        uint32_t wg, const void* kernarg, size_t kernarg_size,
+                        const RtArg* args, uint32_t nargs,
+                        uint32_t group_size, uint32_t private_size,
+                        uint64_t* widx) {
+    if (!kobj) {
+        fprintf(stderr, "hsa_rt: HSACO 里没有内核 %s\n", dbg_name);
+        return false;
+    }
+    const int slot = g_next;
+    if (g_slot_used[slot])
+        hsa_signal_wait_scacquire(g_sig[slot], HSA_SIGNAL_CONDITION_LT, 1, UINT64_MAX,
+                                  HSA_WAIT_STATE_ACTIVE);
+    char* ka = (char*)g_karg[slot];
+    memcpy(ka, kernarg, kernarg_size);
+    const uint64_t gx = (uint64_t)grid_wg * wg;
+    const uint32_t nbx = grid_wg;
+    for (uint32_t i = 0; i < nargs; i++) {
+        const RtArg& a = args[i];
+        if (a.kind == 0) continue;
+        uint64_t v = 0;
+        switch (a.kind) {
+            case 1: v = nbx; break;         // hidden_block_count_x
+            case 4: v = wg; break;          // hidden_group_size_x
+            case 13: v = 1; break;          // hidden_grid_dims（只用 1D）
+            default: v = 0; break;
+        }
+        if (a.size == 2) { uint16_t x = (uint16_t)v; memcpy(ka + a.off, &x, 2); }
+        else if (a.size == 4) { uint32_t x = (uint32_t)v; memcpy(ka + a.off, &x, 4); }
+        else { memcpy(ka + a.off, &v, 8); }
+    }
+    hsa_kernel_dispatch_packet_t* pkt = (hsa_kernel_dispatch_packet_t*)(
+        (char*)g_queue->base_address + (*widx % g_queue->size) * sizeof(*pkt));
+    (*widx)++;
+    memset(pkt, 0, sizeof(*pkt));
+    pkt->setup = 1;
+    pkt->workgroup_size_x = (uint16_t)wg;
+    pkt->workgroup_size_y = 1;
+    pkt->workgroup_size_z = 1;
+    pkt->grid_size_x = gx;
+    pkt->grid_size_y = 1;
+    pkt->grid_size_z = 1;
+    pkt->private_segment_size = private_size;
+    pkt->group_segment_size = group_size;
+    pkt->kernel_object = kobj;
+    pkt->kernarg_address = ka;
+    hsa_signal_store_screlease(g_sig[slot], 1);
+    pkt->completion_signal = g_sig[slot];
+    const uint16_t header = (uint16_t)(
+        (HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE) |
+        (HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE) |
+        (HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_SCRELEASE_FENCE_SCOPE));
+    __atomic_store_n(&pkt->header, header, __ATOMIC_RELEASE);
+    g_slot_used[slot] = true;
+    g_next = (g_next + 1) % N_SLOT;
+    if (g_pending < N_SLOT) g_pending++;
+    return true;
+}
+
+static void packet_publish(uint64_t widx) {
+    hsa_queue_store_write_index_screlease(g_queue, widx);
+    hsa_signal_store_screlease(g_queue->doorbell_signal, widx - 1);
+}
+
+// 批量投递：`plan` 每条记录 = [kernel_id, grid, workgroup, nargs, argv...]。
+// 一次调用把整段前向（十几个内核）全部入队，省掉逐条 launch 的主机侧开销。
+static bool packet_fill(uint64_t kobj, const char* dbg_name, uint32_t grid_wg,
+                        uint32_t wg, const void* kernarg, size_t kernarg_size,
+                        const RtArg* args, uint32_t nargs,
+                        uint32_t group_size, uint32_t private_size, uint64_t* widx);
+static void packet_publish(uint64_t widx);
+
+int hsart_kernel_id(const char* name) {
+    const RtKernel* k = hsart_lookup(name);
+    return k ? (int)(k - k_table) : -1;
+}
+
+int hsart_launch_batch(const uint64_t* plan, int nrec) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    uint64_t widx = hsa_queue_load_write_index_relaxed(g_queue);
+    int done = 0;
+    const uint64_t* p = plan;
+    for (int r = 0; r < nrec; r++) {
+        const uint64_t id = *p++;
+        const uint64_t grid_wg = *p++;
+        const uint64_t wg = *p++;
+        const int nargs = (int)*p++;
+        if (id >= (uint64_t)k_table_n || nargs < 0) break;
+        const RtKernel* k = &k_table[id];
+        int n = 0;
+        for (uint32_t i = 0; i < k->nargs; i++) {
+            if (k->args[i].kind != 0) break;
+            n++;
+        }
+        if (n != nargs) {
+            fprintf(stderr, "hsa_rt: 批量投递 %s 参数个数不符（要 %d 给 %d）\n",
+                    k->lookup, n, nargs);
+            break;
+        }
+        char kernarg[MAX_KERNARG];
+        memset(kernarg, 0, k->kernarg_size);
+        for (int i = 0; i < n; i++) {
+            size_t sz = k->args[i].size;
+            if (sz > 8) sz = 8;
+            memcpy(kernarg + k->args[i].off, p + i, sz);
+        }
+        p += nargs;
+        if (!packet_fill(g_kobj[id], k->lookup, (uint32_t)grid_wg, (uint32_t)wg,
+                         kernarg, k->kernarg_size, k->args, k->nargs,
+                         k->group_size, k->private_size, &widx))
+            break;
+        done++;
+    }
+    if (done > 0) packet_publish(widx);   // 只敲一次门铃
+    return done;
+}
+
 void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
                     const void* kernarg, size_t kernarg_size) {
     dispatch_packet(g_kobj[k - k_table], k->lookup, grid, block, smem, kernarg, kernarg_size,

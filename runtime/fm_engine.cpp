@@ -130,4 +130,12 @@ int fm_launch_dyn(const char* kernel, uint32_t gx, uint32_t gy,
     return 0;
 }
 
+// 批量投递：hsart_kernel_id / hsart_launch_batch 实现在 hsa_rt.cpp
+// （那里能拿到 static 的 k_table 与 dispatch_packet），声明在 hsa_rt.h。
+int fm_kernel_id(const char* kernel) { return hsart_kernel_id(kernel); }
+
+int fm_launch_batch(const uint64_t* plan, int nrec) {
+    return hsart_launch_batch(plan, nrec);
+}
+
 }  // extern "C"

@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, MLP, MoECombine,  # noqa: E402
                             Attention, FlashAttention, MoEExperts, RMSNorm, RoPE,
-                            Runtime, TransformerLayer, Workspace,
+                            LaunchPlan, Runtime, TransformerLayer, Workspace,
                             dequant_int4_group128, pack_int4_group128)
 from iq_dequant import dequant_iq4_nl, dequant_q4_0_fast  # noqa: E402
 
@@ -263,6 +263,55 @@ def run_rope(rt: Runtime, dim: int, rng) -> None:
     rope.ws.free()
 
 
+def run_batched_launch(rt: Runtime, rng) -> None:
+    """批量投递：`Runtime.batch()` / `LaunchPlan` 与逐条 launch 结果一致 + 计时。"""
+    n = 512
+    a = rt.alloc(n * 4)
+    b = rt.alloc(n * 4)
+    c = rt.alloc(n * 4)
+    rt.upload(a, rng.standard_normal(n).astype(np.float32))
+    rt.upload(b, rng.standard_normal(n).astype(np.float32))
+    grid = -(-n // 64)
+    rt.memset(c, 0, n * 4)          # 基线也要先清零（add_inplace_k 是累加）
+    for _ in range(4):
+        rt.launch("add_inplace_k", grid, 64, [c, a, n])
+    rt.sync()
+    seq = rt.download(c, n, np.float32).copy()
+    rt.memset(c, 0, n * 4)
+    with rt.batch():
+        for _ in range(4):
+            rt.launch("add_inplace_k", grid, 64, [c, a, n])
+    rt.sync()
+    got = rt.download(c, n, np.float32)
+    ok_seq = bool(np.array_equal(seq, got))
+    # plan：录一次、重放（打补丁后再跑一遍）
+    rt.memset(c, 0, n * 4)
+    plan = LaunchPlan(rt, [("add_inplace_k", grid, 64, [c, a, n])] * 4)
+    plan.run()
+    rt.sync()
+    ok_plan = bool(np.array_equal(seq, rt.download(c, n, np.float32)))
+
+    def bench(fn, it=300):
+        fn(); rt.sync()
+        t0 = time.perf_counter()
+        for _ in range(it):
+            fn()
+        rt.sync()
+        return (time.perf_counter() - t0) / it * 1e6
+
+    def seq_launch():
+        for _ in range(4):
+            rt.launch("add_inplace_k", grid, 64, [c, a, n])
+
+    t_seq = bench(seq_launch)
+    t_bat = bench(lambda: plan.run())
+    if not (ok_seq and ok_plan):
+        FAILURES.append("batched launch 与逐条结果不一致")
+    print(f"[batch] 4 次 launch：逐条 {t_seq:.1f} us → plan 重放 {t_bat:.1f} us "
+          f"（结果一致 {ok_seq and ok_plan}）")
+    rt.free(a); rt.free(b); rt.free(c)
+
+
 def run_transformer_layer(rt: Runtime, rng) -> None:
     """一整层 decoder（RMSNorm→QKV→RoPE→融合注意力→残差→RMSNorm→SwiGLU→残差）
     跑 T 个 token，和 NumPy 参考（自己维护 KV 缓存）逐 token 对账 + 计时。
@@ -416,6 +465,7 @@ def main() -> int:
     run_attention(rt, 128, 640, rng)
     run_flash_attention(rt, rng)
     run_transformer_layer(rt, rng)
+    run_batched_launch(rt, rng)
     run_f32(rt, args.rows, args.dim, args.ffn, rng)
     run_int4(rt, args.rows, args.dim, args.ffn, rng)
     run_moe(rt, args.rows, args.dim, args.moe_exp, rng)

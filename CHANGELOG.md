@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.9.0
+
+**批量投递 + 重放**（`Runtime.batch()` / `LaunchPlan` + 引擎 `fm_launch_batch`），
+外加两处融合；一层 decoder 从 **0.31 → 0.26 ms/token**。内核包 135 → 136。
+
+### 为什么
+
+v1.8.9 把整层跑通后发现：`dim=512/8 头/ffn=1024` 一层设备侧 0.31 ms，而这一层
+的**权重只有 10 MB（~17 us）**——时间全在「**每 token 13~16 次 launch**」上。
+逐项量了一遍主机侧开销（每 token 只入队、不同步）：
+
+| 动作 | 耗时 |
+|---|---:|
+| 逐条 `rt.launch`（真实 op 路径） | **16.6 us/次** |
+| 其中 `_pack_argv`（13 个参数） | 4.0 us |
+| ctypes 调用 + 引擎查找 | 0.3 us（查表已是哈希） |
+| 引擎侧 `fm_launch`（含 doorbell） | 其余 |
+
+### 做法
+
+1. **引擎 `fm_launch_batch`**：一次调用把 N 个 dispatch 包填进队列，
+   **只敲一次 doorbell**（每次 MMIO 写就要几微秒），并直接用内核编号代替
+   名字查找；配套 `fm_kernel_id`。
+2. **`Runtime.batch()`**：区间内的 `launch()` 只记录，退出时一次性投递。
+3. **`LaunchPlan`**：录一次、重放很多次 —— 摊销成一个 `uint64` 数组，
+   重放时只打几个补丁（`set_arg` / `set_grid`）再投递。
+   `TransformerLayer` 就用它：第一个 token 录制，之后每个 token 只补
+   RoPE 的表行、KV 追加的列偏移、注意力的长度/分块/grid。
+4. **`vt_scatter_v_k`（第 136 个内核）**：一个 launch 同时做「K 转置」和
+   「V 按行拷贝」。原来 V 那份是主机侧 `copy_dev`，而批量只推迟 `launch`、
+   不推迟拷贝 —— 它卡在中间会破坏重放的顺序；合进内核后整条追加都是 launch。
+5. **`flash_dec_part_k` 提前退出**：`base >= n_kv` 的段整段都是 mask，
+   直接写 `pm=-inf / pl=0 / po=0` 走人。解码早期 `nsplit` 里绝大多数段是空的，
+   原来每段还要把 R 行扫两遍。
+
+### 实测
+
+| | 改前 | 改后 |
+|---|---:|---:|
+| 一层 decoder（设备侧，一次 sync） | 0.31 ms/token | **0.26 ms/token** |
+| 一层 decoder（numpy 进/出） | 0.97 ms/token | 0.92 ms/token |
+| 4 次 launch 的微基准 | 30.6 us | 28.0 us（plan 重放） |
+| 逐 token 对账（12 token，缓存增长中） | 1.9e-07 | 1.9e-07 |
+
+**剩下的瓶颈**：0.26 ms / 13 个内核 ≈ 每内核 ~20 us，而每条 dispatch 的
+**GPU 侧**开销实测约 7 us（微基准里 16 次同内核 112 us）——所以下一步是
+**减少内核数**（ROADMAP B4：RMSNorm+量化、qkv+rope、注意力+输出投影、
+SwiGLU+down、残差并入 GEMV 等）。
+
+### 验证
+
+* `examples/python_model_layer.py` 新增 `run_batched_launch`：`batch` 与 `plan`
+  的结果与逐条 launch **逐位相同**（进入 `check_all`）。
+* `tools/selftest_all.py` 73 → **74 个用例**（新增 `vt_scatter_v_k`：K 转置与
+  V 拷贝同时验证）；`vt_scatter_v_k` 另外过了 6 组形状（含 `y0 != 0`）。
+* `TransformerLayer` 逐 token 对账仍为 1.9e-07（12 个 token、KV 缓存增长）。
+* `bash tools/check_all.sh` 全绿。
+
 ## 1.8.9
 
 **一整层 decoder 跑通了**：新增 `TransformerLayer`（RMSNorm → QKV → RoPE → 追加

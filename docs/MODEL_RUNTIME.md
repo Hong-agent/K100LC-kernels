@@ -281,6 +281,26 @@ y_dev = rope.forward_device(x_dev, rows, pos, sync=False)   # 逐 token 免同�
 的交错 `(2j, 2j+1)`。内核 `rope_apply_k` 由本仓库编译器从
 `compiler/examples/rope_apply.kkl` 生成，与 NumPy **逐位相同**。
 
+### 4.9 批量投递 / 重放：`Runtime.batch()` / `LaunchPlan`
+
+一层 decoder 十几个内核，逐条 `launch` 的主机侧开销（打包参数 + ctypes + 引擎
+查找 + 敲门铃）实测 **8~16 us/次**，整层就是 0.27 ms 里的大头。两种攒法：
+
+```python
+with rt.batch():                 # 区间内的 launch 只记录，退出时一次投递
+    ...                          # （注意：upload/copy_dev/memset 仍是立即执行）
+
+plan = LaunchPlan(rt, calls)     # 录一次、重放很多次
+plan.set_arg(2, 7, pos)          # 打补丁：第 3 条记录的第 8 个参数
+plan.set_grid(4, n_heads * nsplit)
+plan.run()                       # 一次 ctypes 调用全部入队
+```
+
+引擎侧（`fm_launch_batch`）把 N 个 dispatch 包**一次填进队列、只敲一次门铃**，
+并省掉每条记录的名字查找。`TransformerLayer` 内部就用了 `LaunchPlan`（第一个
+token 录制、之后每 token 只打几个补丁），实测整层 **0.31 → 0.26 ms/token**；
+`examples/python_model_layer.py` 里 `run_batched_launch` 会验证「批量 == 逐条」。
+
 ### 5.0 一整层：`TransformerLayer`
 
 ```python

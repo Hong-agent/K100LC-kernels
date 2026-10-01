@@ -142,6 +142,17 @@ def gen_part_asm() -> str:
         "v_lshlrev_b32_e32 v18, 2, v0",             # lane*4
         "v_lshlrev_b32_e32 v41, 2, v34",            # 归约槽基址 R*4（广播用）
         "v_add_u32_e32 v19, v41, v18",              # 本 lane 的槽 = R*4 + lane*4
+
+        # 整段都被 mask（base >= n_kv）→ 写 pm=-inf / pl=0 / po=0 直接退出：
+        # 解码早期 nsplit 里绝大多数段是空的，原来每段还要把 R 行扫两遍
+        "s_mov_b32 s42, 1",
+        "s_lshl_b32 s42, s42, s32",
+        "s_mov_b32 s43, 1",
+        "s_sub_u32 s43, s42, s43",                  # nsplit-1
+        "s_and_b32 s44, s6, s43",                   # split
+        "s_mul_i32 s45, s44, s34",                  # base
+        "s_cmp_lt_u32 s45, s28",                    # base < n_kv ？
+        "s_cbranch_scc0 L_masked",
         # ---------------- 第一趟：分数 ----------------
         "s_mov_b32 s36, 0",                         # c
         "L_c1:", "s_cmp_lt_u32 s36, s38",
@@ -462,6 +473,47 @@ def gen_part_asm() -> str:
         "s_add_i32 s36, s36, 64",
         "s_branch L_i",
         "L_i_done:",
+        # ---------------- 整段被 mask 的出口 ----------------
+        "s_endpgm",
+        "L_masked:",
+        "v_mov_b32_e32 v20, 0xff800000",            # m = -inf
+        "v_mov_b32_e32 v21, 0",                     # l = 0
+        "v_cmp_eq_u32_e32 vcc, 0, v0",
+        "s_and_saveexec_b64 s[4:5], vcc",
+        "v_lshlrev_b32_e32 v30, s32, v3",
+        "v_add_u32_e32 v30, v30, v4",               # head*nsplit + split
+        "v_lshlrev_b32_e32 v31, 2, v30",
+        "v_mov_b32_e32 v32, s18",
+        "v_mov_b32_e32 v33, s19",
+        "v_add_co_u32_e32 v32, vcc, v32, v31",
+        "v_addc_co_u32_e32 v33, vcc, v33, v1, vcc",
+        "global_store_dword v[32:33], v20, off",    # pm = -inf
+        "v_mov_b32_e32 v32, s20",
+        "v_mov_b32_e32 v33, s21",
+        "v_add_co_u32_e32 v32, vcc, v32, v31",
+        "v_addc_co_u32_e32 v33, vcc, v33, v1, vcc",
+        "global_store_dword v[32:33], v21, off",    # pl = 0
+        "s_or_b64 exec, exec, s[4:5]",
+        "s_mov_b32 s36, 0",
+        "L_mz:", "s_cmp_lt_u32 s36, s29",
+        "s_cbranch_scc0 L_mz_done",
+        "v_mov_b32_e32 v22, s36",
+        "v_add_u32_e32 v22, v22, v0",               # d = i*64 + lane
+        "v_cmp_lt_u32_e64 vcc, v22, v35",
+        "s_and_saveexec_b64 s[6:7], vcc",
+        "s_cbranch_execz L_mz_next",
+        "v_lshlrev_b32_e32 v25, 2, v22",
+        "v_mov_b32_e32 v26, v16",
+        "v_mov_b32_e32 v27, v17",
+        "v_add_co_u32_e32 v26, vcc, v26, v25",
+        "v_addc_co_u32_e32 v27, vcc, v27, v1, vcc",
+        "v_mov_b32_e32 v23, 0",
+        "global_store_dword v[26:27], v23, off",    # po = 0
+        "L_mz_next:",
+        "s_or_b64 exec, exec, s[6:7]",
+        "s_add_i32 s36, s36, 64",
+        "s_branch L_mz",
+        "L_mz_done:",
         "s_endpgm",
     ]
     return "\n".join(L) + "\n"

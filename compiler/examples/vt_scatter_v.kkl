@@ -1,0 +1,34 @@
+# `vt_scatter_k` 的加强版：转置写 Kt 的同时，把同一块 V 按行主序拷进缓存。
+#
+#   vt[d*ystride + y0 + t] = k[t*kstride + d]      （K：转置）
+#   vc[(y0 + t)*dim + d]   = v[t*vstride + d]      （V：原样拷）
+#
+# 为什么要合起来：解码注意力每次追加 KV 都要「K 转置 + V 拷贝」两步，而 V 那份
+# 拷贝如果放在主机侧 `copy_dev`，就没法和其它 launch 一起攒进批量投递
+# （`Runtime.batch()` 只推迟 launch，不推迟拷贝）；而且 V 的数据本来就是这
+# 个内核读进来的一批，顺手写出去是最省的。
+#
+# grid = ceil(rows/64) * (dim/64)，cshift = log2(dim/64)；要求 dim % 64 == 0
+# 且 dim/64 是 2 的幂。
+def vt_scatter_v_k(vt: ptr[f32], vc: ptr[f32], k: ptr[f32], v: ptr[f32],
+                   rows: u32, dim: u32, kstride: u32, vstride: u32,
+                   ystride: u32, y0: u32, cshift: u32):
+    blk = bid()
+    ln = lane()
+    ct = 1 << cshift
+    rt = blk >> cshift
+    cb = blk & (ct - 1)
+    r0 = rt << 6
+    c0 = cb << 6
+    sm = lds(64 * 65)
+    for t in range(0, 64):
+        r = r0 + t
+        if r < rows:
+            sm[t * 65 + ln] = k[r * kstride + c0 + ln]
+            vc[(y0 + r) * dim + c0 + ln] = v[r * vstride + c0 + ln]
+    barrier()
+    for d in range(0, 64):
+        c = c0 + d
+        if (r0 + ln) < rows:
+            if c < dim:
+                vt[c * ystride + y0 + r0 + ln] = sm[ln * 65 + d]

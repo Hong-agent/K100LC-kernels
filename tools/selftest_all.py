@@ -1264,6 +1264,36 @@ def t_flash_dec_part(ctx: Ctx):
     return judge(np.abs(got - ref).max(), ref)
 
 
+@case("attn", "vt_scatter_v_k")
+def t_vt_scatter_v(ctx: Ctx):
+    """K 转置 + V 原样拷（**一个** launch 完成 KV 追加的两件事）。
+
+    `(vt, vc, k, v, rows, dim, kstride, vstride, ystride, y0, cshift)`；
+    `vt[d*ystride + y0 + t] = k[t*kstride + d]`、
+    `vc[(y0 + t)*dim + d] = v[t*vstride + d]`。合起来是为了让整个追加都是
+    launch —— 这样它能跟别的 launch 一起进 `Runtime.batch()`/`LaunchPlan`。
+    """
+    rows, dim, max_len, y0 = 100, 128, 256, 3
+    cshift = (dim // 64).bit_length() - 1
+    rng = np.random.default_rng(170)
+    k = rng.standard_normal((rows, dim)).astype(np.float32)
+    v = rng.standard_normal((rows, dim)).astype(np.float32)
+    vt = np.full((dim, max_len), -7.0, np.float32)
+    vc = np.full((max_len, dim), -7.0, np.float32)
+    pvt, pvc = ctx.buf(vt), ctx.buf(vc)
+    ctx.launch("vt_scatter_v_k", -(-rows // 64) * (dim // 64), 64,
+               [pvt, pvc, ctx.buf(k), ctx.buf(v), rows, dim, dim, dim,
+                max_len, y0, cshift])
+    got_vt = ctx.get(pvt, dim * max_len).reshape(dim, max_len)
+    got_vc = ctx.get(pvc, max_len * dim).reshape(max_len, dim)
+    ref_vt = vt.copy()
+    ref_vt[:, y0:y0 + rows] = k.T
+    ref_vc = vc.copy()
+    ref_vc[y0:y0 + rows] = v
+    bad = int((got_vt != ref_vt).sum()) + int((got_vc != ref_vc).sum())
+    return judge(float(bad), np.array([1.0], np.float32))
+
+
 @case("attn", "vt_scatter_k")
 def t_vt_scatter(ctx: Ctx):
     """V 行主序 → `Vt [dim, max_len]` 转置（**编译器 + DSL 共享内存**生成的核）。

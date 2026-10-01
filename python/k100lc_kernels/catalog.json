@@ -10880,6 +10880,135 @@
    "kernarg_size": 96,
    "group_segment": 16640,
    "private_segment": 0
+  },
+  {
+   "name": "vt_scatter_v_k",
+   "lookup": "vt_scatter_v_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 52,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 56,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 64,
+     "size": 4,
+     "kind": "hidden_block_count_x"
+    },
+    {
+     "off": 68,
+     "size": 4,
+     "kind": "hidden_block_count_y"
+    },
+    {
+     "off": 72,
+     "size": 4,
+     "kind": "hidden_block_count_z"
+    },
+    {
+     "off": 76,
+     "size": 2,
+     "kind": "hidden_group_size_x"
+    },
+    {
+     "off": 78,
+     "size": 2,
+     "kind": "hidden_group_size_y"
+    },
+    {
+     "off": 80,
+     "size": 2,
+     "kind": "hidden_group_size_z"
+    },
+    {
+     "off": 82,
+     "size": 2,
+     "kind": "hidden_remainder_x"
+    },
+    {
+     "off": 84,
+     "size": 2,
+     "kind": "hidden_remainder_y"
+    },
+    {
+     "off": 86,
+     "size": 2,
+     "kind": "hidden_remainder_z"
+    },
+    {
+     "off": 88,
+     "size": 8,
+     "kind": "hidden_global_offset_x"
+    },
+    {
+     "off": 96,
+     "size": 8,
+     "kind": "hidden_global_offset_y"
+    },
+    {
+     "off": 104,
+     "size": 8,
+     "kind": "hidden_global_offset_z"
+    },
+    {
+     "off": 112,
+     "size": 2,
+     "kind": "hidden_grid_dims"
+    }
+   ],
+   "kernarg_size": 120,
+   "group_segment": 16640,
+   "private_segment": 0
   }
  ]
 }
