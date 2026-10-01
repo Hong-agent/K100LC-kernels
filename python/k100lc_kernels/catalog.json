@@ -8372,6 +8372,45 @@
    "private_segment": 0
   },
   {
+   "name": "gemv_f32_rows8_acc_k",
+   "lookup": "gemv_f32_rows8_acc_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 40,
+   "group_segment": 256,
+   "private_segment": 0
+  },
+  {
    "name": "gemv_f32_rows8_k",
    "lookup": "gemv_f32_rows8_k",
    "args": [
@@ -8452,6 +8491,45 @@
    ],
    "kernarg_size": 40,
    "group_segment": 256,
+   "private_segment": 0
+  },
+  {
+   "name": "gemv_f32_warp_acc_k",
+   "lookup": "gemv_f32_warp_acc_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 40,
+   "group_segment": 1024,
    "private_segment": 0
   },
   {

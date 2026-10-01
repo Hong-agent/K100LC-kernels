@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.9.1
+
+**残差并进 GEMV**：两个累加变体 `gemv_f32_rows8_acc_k` / `gemv_f32_warp_acc_k`
+（`y += W·x`），一层 decoder 从 **13 个内核降到 11 个**、**0.26 → 0.23 ms/token**。
+内核包 136 → 138。
+
+### 做法
+
+一层的两个残差原来是独立的 `add_inplace_k`（各占一次 dispatch，而每条 dispatch
+的 GPU 侧开销实测约 7 us）：
+
+```
+h += W_o · attn          ← attn 与 h 是不同缓冲，直接让 GEMV 累加就行
+h += W_down · act
+```
+
+于是给 f32 GEMV 的两个分支各加一个**累加变体**：存储阶段先 `global_load_dword`
+把 `y` 读回来、`v_add_f32` 再写回（`gemv_f32_rows8_acc_k` 用 8 行/warp、
+`gemv_f32_warp_acc_k` 用 warp-per-row，和 `gemv_f32` 的选型规则一致）。
+`model.gemv_f32_acc()` 自动按 `k` 选型，旧 hsaco 里没有这两颗内核时退回
+「GEMV + `add_inplace_k`」两步。
+
+### 实测
+
+| | 改前 | 改后 |
+|---|---:|---:|
+| 一层 decoder 的内核数 | 13 | **11** |
+| 一层设备侧（一次 sync） | 0.26 ms/token | **0.23 ms/token** |
+| 逐 token 与 NumPy 参考（12 token） | 1.9e-07 | 1.9e-07 |
+
+单看新内核（`runtime` 直调、对账 `y0 + W·x`）：512×512 → 2.5e-07、
+512×1024（warp 变体）→ 5.3e-07、1536×512 → 3.1e-07。
+
+### 踩坑记录
+
+新内核一开始在包内**算错**（rel ≈ 1.0），而 lab 里用 `run_one` 却是对的 ——
+原因是 `build_native_kernels.py` 里 LDS 大小的白名单是**按内核名**写的，
+新名字没加进去，于是 HSACO 里声明成 `group_segment = 0` ✗，内核却照样用
+256/1024 B 的 LDS 做归约 → 归约结果随机。加进白名单后正常。
+（这条也说明：**新内核必须同时出现在 LDS 白名单里**，否则 lab 对账会漏过去。）
+
+### 验证
+
+* `tools/selftest_all.py` 74 → **76 个用例**（新增两个 acc 变体）；
+* `examples/python_model_layer.py` 的 `run_transformer_layer` 仍然逐 token 对账
+  （8 个 token，max_rel 2.2e-07）；
+* `bash tools/check_all.sh` 全绿。
+
 ## 1.9.0
 
 **批量投递 + 重放**（`Runtime.batch()` / `LaunchPlan` + 引擎 `fm_launch_batch`），

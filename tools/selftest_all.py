@@ -462,6 +462,34 @@ def t_gemv_f32_warp(ctx: Ctx):
     ref = w @ x
     return judge(np.abs(ctx.get(yp, nrows) - ref).max(), ref)
 
+@case("gemv", "gemv_f32_rows8_acc_k")
+def t_gemv_f32_rows8_acc(ctx: Ctx):
+    """`y += W·x`（残差并进 GEMV）——8 行/warp 版的累加变体。"""
+    nrows, k = 64, 256
+    rng = np.random.default_rng(180)
+    w = rng.standard_normal((nrows, k)).astype(np.float32)
+    x = rng.standard_normal(k).astype(np.float32)
+    y0 = rng.standard_normal(nrows).astype(np.float32)
+    wp, xp, yp = ctx.buf(w), ctx.buf(x), ctx.buf(y0)
+    ctx.launch("gemv_f32_rows8_acc_k", nrows // 8, 64, [wp, xp, yp, nrows, k, 64])
+    ref = (y0 + w @ x).astype(np.float32)
+    return judge(np.abs(ctx.get(yp, nrows) - ref).max(), ref)
+
+
+@case("gemv", "gemv_f32_warp_acc_k")
+def t_gemv_f32_warp_acc(ctx: Ctx):
+    """`y += W·x`——warp-per-row 版的累加变体（k 大时用这条）。"""
+    nrows, k = 64, 1024
+    rng = np.random.default_rng(181)
+    w = rng.standard_normal((nrows, k)).astype(np.float32)
+    x = rng.standard_normal(k).astype(np.float32)
+    y0 = rng.standard_normal(nrows).astype(np.float32)
+    wp, xp, yp = ctx.buf(w), ctx.buf(x), ctx.buf(y0)
+    ctx.launch("gemv_f32_warp_acc_k", nrows, 64, [wp, xp, yp, nrows, k, 64])
+    ref = (y0 + w @ x).astype(np.float32)
+    return judge(np.abs(ctx.get(yp, nrows) - ref).max(), ref)
+
+
 @case("gemv", "gemv_f32_rows8_k")
 def t_gemv_f32_rows8(ctx: Ctx):
     """8 行 / workgroup 的 f32 GEMV（解码注意力 K·q 用的那条路）。

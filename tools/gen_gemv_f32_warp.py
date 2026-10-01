@@ -23,12 +23,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 from kernel_lab import buffer_arg, build_one, run_one, scalar_arg  # noqa: E402
 
 NAME = "gemv_f32_warp_k"
+ACC_NAME = "gemv_f32_warp_acc_k"       # y += W·x
 ARGS = [buffer_arg(0), buffer_arg(8), buffer_arg(16),
         scalar_arg(24, 4), scalar_arg(28, 4), scalar_arg(32, 4)]
 KERNARG_SIZE = 40
 
 
-def gen_asm() -> str:
+def gen_asm(acc: bool = False) -> str:
     L = [
         ".text", f"k_{NAME}:",
         "s_load_dwordx2 s[16:17], s[4:5], 0x0",   # w
@@ -99,6 +100,11 @@ def gen_asm() -> str:
         "v_mov_b32_e32 v11, 0",
         "ds_read_b32 v18, v11",
         "s_waitcnt lgkmcnt(0)",
+    ] + ([
+        "global_load_dword v20, v[16:17], off",
+        "s_waitcnt vmcnt(0)",
+        "v_add_f32_e32 v18, v18, v20",
+    ] if acc else []) + [
         "global_store_dword v[16:17], v18, off",
         "s_or_b64 exec, exec, s[2:3]",
         "L_end:",
@@ -130,6 +136,12 @@ def main() -> int:
     ok = d.max() < 1e-2 * max(1.0, float(np.abs(ref).max()))
     print("vs numpy:", "一致 ✔" if ok else "不一致 ✘")
     return 0 if ok else 1
+
+
+KERNELS = [
+    (NAME, gen_asm, ARGS, KERNARG_SIZE),
+    (ACC_NAME, (lambda: gen_asm(acc=True)), ARGS, KERNARG_SIZE),
+]
 
 
 if __name__ == "__main__":

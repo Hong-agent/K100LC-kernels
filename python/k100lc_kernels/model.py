@@ -67,6 +67,23 @@ SPLIT_SOFTMAX_MIN_PAD = 2048
 SPLITK_VTP = True
 
 
+def gemv_f32_acc(rt: Runtime, w: int, x: int, y: int, nrows: int, k: int) -> None:
+    """`y += W·x`（把残差并进 GEMV，省一次 `add_inplace_k`）。
+
+    和 `gemv_f32` 一样的选型规则，只是走 `*_acc_k` 变体；没有这两颗内核的旧包
+    会退回「GEMV + `add_inplace_k`」两步。
+    """
+    nrows, k = int(nrows), int(k)
+    if (nrows % 8 == 0 and k % 128 == 0 and k <= ROWS8_MAX_K
+            and rt.has("gemv_f32_rows8_acc_k")):
+        rt.launch("gemv_f32_rows8_acc_k", nrows // 8, 64, [w, x, y, nrows, k, 64])
+    elif rt.has("gemv_f32_warp_acc_k"):
+        rt.launch("gemv_f32_warp_acc_k", nrows, 64, [w, x, y, nrows, k, 64])
+    else:
+        gemv_f32(rt, w, x, y, nrows, k)
+        rt.launch("add_inplace_k", cdiv(nrows, 64), 64, [y, y, nrows])
+
+
 def gemv_f32(rt: Runtime, w: int, x: int, y: int, nrows: int, k: int) -> None:
     """f32 GEMV 的分派：小 k 走 8 行/warp 版，其余走 warp-per-row。
 
@@ -1208,16 +1225,14 @@ class TransformerLayer:
         self.attn.append_device(qk + self.dim * 4, qkv + 2 * self.dim * 4, 1)
         self.length += 1
         attn = self.attn.forward_device(qk)
-        o = self.o.forward_device(attn, 1, sync=False)
-        rt.launch("add_inplace_k", cdiv(self.dim, 64), 64,
-                  [self.h, o, self.dim])
+        # 残差并进输出投影：h += W_o·attn（省一次 add_inplace_k）
+        gemv_f32_acc(rt, self.o.w, attn, self.h, self.dim, self.dim)
         n2 = self.norm2.forward_device(self.h, 1, sync=False)
         gu = self.gate_up.forward_device(n2, 1, sync=False)
         act = self.act.forward_device(gu, gu + self.ffn * 4, self.ffn,
                                       out_dev=self.acc)
-        d = self.down.forward_device(act, 1, sync=False)
-        rt.launch("add_inplace_k", cdiv(self.dim, 64), 64,
-                  [self.h, d, self.dim])
+        # 残差并进 down 投影：h += W_down·act
+        gemv_f32_acc(rt, self.down.w, act, self.h, self.dim, self.ffn)
         return self.h
 
     def forward(self, x: np.ndarray, pos: int, sync: bool = True):

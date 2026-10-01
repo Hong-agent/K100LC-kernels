@@ -96,10 +96,12 @@ def main() -> int:
             "group_segment": (16640 if name == "flash_dec_part_k" else
                               256 if name in ("gemv_f32_rows8_k",
                                               "gemv_f32_rows8_split_k",
+                                              "gemv_f32_rows8_acc_k",
                                               "block_max_k",
                                               "block_exp_sum_k", "reduce_max1_k",
                                               "reduce_sum1_k") else
-                              1024 if name in ("gemv_f32_warp_k", "softmax_k",
+                              1024 if name in ("gemv_f32_warp_k",
+                                               "gemv_f32_warp_acc_k", "softmax_k",
                                                "softmax_vec_k", "layernorm_k")
                               else 0),
             "private_segment": 0,

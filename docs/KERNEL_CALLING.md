@@ -428,6 +428,11 @@ rt.launch("gemv_f32_warp_k", n, 64, [pw, px, py, n, k, 64])
 nrows, k, sh = 16384, 128, 4           # k % 128 == 0, nrows % 8 == 0
 rt.launch("gemv_f32_rows8_k", nrows // 8, 64, [pw, px, py, nrows, k, 64])
 
+# 累加变体（把残差并进 GEMV，省一次 add_inplace_k）：y += W·x
+#   k ≤ 512 且 128 的倍数 → gemv_f32_rows8_acc_k；否则 gemv_f32_warp_acc_k
+#   （`model.gemv_f32_acc()` 会自己选）
+rt.launch("gemv_f32_rows8_acc_k", nrows // 8, 64, [pw, px, py, nrows, k, 64])
+
 # split-K：nrows 很小、k 很大时（例如 Vt·P）
 #   part 要有 nrows<<sh 个 f32；最后 reduce_blocks_k(part, y, nrows, 1<<sh)
 dim, pad, stride = 128, 16384, 16384

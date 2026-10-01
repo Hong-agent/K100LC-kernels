@@ -40,6 +40,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from kernel_lab import buffer_arg, build_one, run_one, scalar_arg  # noqa: E402
 
 NAME = "gemv_f32_rows8_k"
+ACC_NAME = "gemv_f32_rows8_acc_k"      # y += W·x（把残差并进 GEMV）
 ARGS = [buffer_arg(0), buffer_arg(8), buffer_arg(16),
         scalar_arg(24, 4), scalar_arg(28, 4), scalar_arg(32, 4)]
 KERNARG_SIZE = 40
@@ -58,7 +59,7 @@ LANES_PER_ROW = 8
 ELEMS_PER_LANE = 16                 # 4 × dwordx4
 
 
-def gen_asm() -> str:
+def gen_asm(acc: bool = False) -> str:
     L = [
         ".text", f"k_{NAME}:",
         "s_load_dwordx2 s[16:17], s[4:5], 0x0",   # w
@@ -177,6 +178,12 @@ def gen_asm() -> str:
         "v_addc_co_u32_e32 v30, vcc, v30, v31, vcc",
         "ds_read_b32 v27, v25",
         "s_waitcnt lgkmcnt(0)",
+    ] + ([
+        # 累加变体：`y += W·x`（残差直接并进来，省一次 add_inplace_k）
+        "global_load_dword v32, v[29:30], off",
+        "s_waitcnt vmcnt(0)",
+        "v_add_f32_e32 v27, v27, v32",
+    ] if acc else []) + [
         "global_store_dword v[29:30], v27, off",
         "s_or_b64 exec, exec, s[2:3]",
         "L_end:",
@@ -375,6 +382,7 @@ def main() -> int:
 # `tools/build_native_kernels.py` 从这里取两个内核
 KERNELS = [
     (NAME, gen_asm, ARGS, KERNARG_SIZE),
+    (ACC_NAME, (lambda: gen_asm(acc=True)), ARGS, KERNARG_SIZE),
     (SPLIT_NAME, gen_split_asm, SPLIT_ARGS, SPLIT_KERNARG),
 ]
 
