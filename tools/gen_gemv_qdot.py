@@ -36,6 +36,8 @@
 """
 from __future__ import annotations
 
+import os
+
 import pathlib
 import sys
 
@@ -203,6 +205,19 @@ REDUCE_KERNARG = 24
 
 
 def gen_reduce_asm() -> str:
+    """`reduce_blocks_k(partial, y, nrows, nbpr)`：`y[r] = sum_j partial[r*nbpr+j]`。
+
+    每个 lane 负责一行、沿 `nbpr` 逐项累加。**不要把循环写成「一次一个 load +
+    一次 `s_waitcnt vmcnt(0)`」**：那样每次 load 都是一整圈访存往返，实测
+    nrows=17408/nbpr=80 要 43.4 us——而这条行和是**所有** `*_dot_k`（MoE /
+    GGUF 解码 / `int4_dot_k`）都要走的收尾步骤。现在一次发 8 个 load、只等
+    一次，再连着加 16 个；尾部（`nbpr & 15`）退回单拍循环。
+
+    加法顺序完全不变（还是 j = 0,1,2,…），所以结果与旧版**逐位相同**，
+    只是访存不再串行。
+
+    签名：`(partial, y, nrows, nbpr)`；grid = ceil(nrows/64)，wg = 64。
+    """
     L = [
         ".text", f"k_{REDUCE_NAME}:",
         "s_load_dwordx2 s[16:17], s[4:5], 0x0",    # partial
@@ -224,9 +239,53 @@ def gen_reduce_asm() -> str:
         "v_add_co_u32_e32 v4, vcc, v4, v2",
         "v_addc_co_u32_e32 v5, vcc, v5, v3, vcc",
         "v_mov_b32_e32 v6, 0",                     # acc
-        "v_mov_b32_e32 v8, 4",                     # 每步 4 字节
+        "v_mov_b32_e32 v8, 4",                     # 单拍步长（尾部用）
+        "v_mov_b32_e32 v9, 64",                    # 一拍 16 个的步长
         "s_mov_b32 s22, 0",
-        "L_loop:",
+        # s23 = nbpr & ~15（两次移位，避免 32 位立即数的 and 编码问题）
+        "s_lshr_b32 s23, s21, 4",
+        "s_lshl_b32 s23, s23, 4",
+        "L_loop16:",
+        "s_cmp_lt_u32 s22, s23",
+        "s_cbranch_scc0 L_tail",
+        "global_load_dword v7, v[4:5], off",
+        "global_load_dword v10, v[4:5], off offset:4",
+        "global_load_dword v11, v[4:5], off offset:8",
+        "global_load_dword v12, v[4:5], off offset:12",
+        "global_load_dword v13, v[4:5], off offset:16",
+        "global_load_dword v14, v[4:5], off offset:20",
+        "global_load_dword v15, v[4:5], off offset:24",
+        "global_load_dword v16, v[4:5], off offset:28",
+        "global_load_dword v17, v[4:5], off offset:32",
+        "global_load_dword v18, v[4:5], off offset:36",
+        "global_load_dword v19, v[4:5], off offset:40",
+        "global_load_dword v20, v[4:5], off offset:44",
+        "global_load_dword v21, v[4:5], off offset:48",
+        "global_load_dword v22, v[4:5], off offset:52",
+        "global_load_dword v23, v[4:5], off offset:56",
+        "global_load_dword v24, v[4:5], off offset:60",
+        "s_waitcnt vmcnt(0)",
+        "v_add_f32_e32 v6, v6, v7",
+        "v_add_f32_e32 v6, v6, v10",
+        "v_add_f32_e32 v6, v6, v11",
+        "v_add_f32_e32 v6, v6, v12",
+        "v_add_f32_e32 v6, v6, v13",
+        "v_add_f32_e32 v6, v6, v14",
+        "v_add_f32_e32 v6, v6, v15",
+        "v_add_f32_e32 v6, v6, v16",
+        "v_add_f32_e32 v6, v6, v17",
+        "v_add_f32_e32 v6, v6, v18",
+        "v_add_f32_e32 v6, v6, v19",
+        "v_add_f32_e32 v6, v6, v20",
+        "v_add_f32_e32 v6, v6, v21",
+        "v_add_f32_e32 v6, v6, v22",
+        "v_add_f32_e32 v6, v6, v23",
+        "v_add_f32_e32 v6, v6, v24",
+        "v_add_co_u32_e32 v4, vcc, v4, v9",
+        "v_addc_co_u32_e32 v5, vcc, v5, v3, vcc",
+        "s_add_i32 s22, s22, 16",
+        "s_branch L_loop16",
+        "L_tail:",
         "s_cmp_lt_u32 s22, s21",
         "s_cbranch_scc0 L_done",
         "global_load_dword v7, v[4:5], off",
@@ -235,7 +294,7 @@ def gen_reduce_asm() -> str:
         "v_add_co_u32_e32 v4, vcc, v4, v8",
         "v_addc_co_u32_e32 v5, vcc, v5, v3, vcc",
         "s_add_i32 s22, s22, 1",
-        "s_branch L_loop",
+        "s_branch L_tail",
         "L_done:",
         "v_lshlrev_b32_e32 v9, 2, v1",
         "v_mov_b32_e32 v11, s19",
@@ -1469,8 +1528,50 @@ def selftest_q4_0() -> int:
                              allow_synth=True)
 
 
+def selftest_reduce() -> int:
+    """`reduce_blocks_k` 的独立自检（不需要 GGUF 索引）。
+
+    重点是覆盖 **16 宽批量化之后** 的尾部：`nbpr` 不是 16 的倍数时要退回单拍
+    循环，所以这里把 1/7/8/9/16/17/63/64/65/80/160 都过一遍，并对齐
+    nrows 不是 64 倍数的情形。
+    """
+    rng = np.random.default_rng(20261004)
+    hsaco = build_one(REDUCE_NAME, gen_reduce_asm(), REDUCE_ARGS,
+                      kernarg_size=REDUCE_KERNARG, tag="red")
+    worst = 0.0
+    for nrows, nbpr in ((64, 1), (64, 7), (64, 8), (128, 9), (64, 16),
+                        (300, 17), (128, 63), (128, 64), (128, 65),
+                        (512, 80), (1000, 160)):
+        part = rng.standard_normal(nrows * nbpr).astype(np.float32)
+        ref = part.reshape(nrows, nbpr).sum(axis=1)
+        out = run_one(hsaco, REDUCE_NAME,
+                      [{"buffer": "part"}, {"buffer": "y"},
+                       {"scalar": {"dtype": "u32", "value": nrows}},
+                       {"scalar": {"dtype": "u32", "value": nbpr}}],
+                      {"part": {"dtype": "f32", "values": part.tolist()},
+                       "y": {"dtype": "f32", "values": [0.0] * nrows}},
+                      grid=(nrows + 63) // 64 * 64, workgroup=64)
+        got = np.array(out["y"], np.float32)
+        rel = float(np.abs(got - ref).max() / max(1e-9, float(np.abs(ref).max())))
+        worst = max(worst, rel)
+        if rel > 1e-5:
+            print(f"reduce_blocks_k FAIL nrows={nrows} nbpr={nbpr} rel={rel:.2e}")
+            return 1
+    print(f"reduce_blocks_k（11 组尺寸，含 nbpr 非 16 倍数）max_rel={worst:.2e} ✔")
+    return 0
+
+
 def main() -> int:
-    rc = selftest_iq4nl()
+    rc = selftest_reduce()
+    # 各量化格式的对账要拿真实 GGUF 权重当输入（`build/gguf_index.json`）；
+    # 没放索引的机器上跳过后面的部分，至少把行和与生成器语法过一遍。
+    import gguf_sample
+    if not gguf_sample.DEFAULT_INDEX.is_file() and not os.environ.get(
+            gguf_sample.ENV_VAR):
+        print(f"（跳过各格式对账：没有 {gguf_sample.DEFAULT_INDEX}；"
+              f"用 {gguf_sample.ENV_VAR}=/path/to/index.json 指定）")
+        return rc
+    rc |= selftest_iq4nl()
     rc |= selftest_iq3xxs()
     rc |= selftest_iq2s()
     rc |= selftest_iq3s()
