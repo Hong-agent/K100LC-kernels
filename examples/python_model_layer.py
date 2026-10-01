@@ -242,7 +242,10 @@ def run_attention(rt: Runtime, dim: int, max_len: int, rng) -> None:
 
     覆盖两种情况：`n_kv` 不是 64 的倍数（要走尾部 -1e30 掩码）与正好是。
     """
-    for n_kv in (100, 640):
+    # 100/640：尾部掩码；300/1024：pad=320 不能被 128 整除（切块要整除 pad）；
+    # 1000/16384：缓存远没填满，验证代价只按当前长度算
+    for n_kv, max_len_ in ((100, 640), (300, 1024), (1000, 16384)):
+        max_len = max(max_len_, n_kv)
         attn = Attention(rt, dim=dim, max_len=max_len, tag=f"attn{n_kv}")
         k = rng.standard_normal((n_kv, dim)).astype(np.float32)
         v = rng.standard_normal((n_kv, dim)).astype(np.float32)

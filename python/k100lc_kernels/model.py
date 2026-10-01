@@ -683,13 +683,16 @@ class Attention:
 
     def __init__(self, rt: Runtime, dim: int, max_len: int,
                  ws: Workspace | None = None, tag: str = "attn",
-                 n_split: int = 8):
+                 n_split: int = 128):
         if dim % 64:
             raise ValueError(f"Attention dim={dim} 必须是 64 的倍数")
         if max_len % 64:
             raise ValueError(f"Attention max_len={max_len} 必须是 64 的倍数")
+        if n_split <= 0 or (n_split & (n_split - 1)):
+            raise ValueError("n_split 必须是 2 的幂")
         self.rt = rt
         self.dim, self.max_len = int(dim), int(max_len)
+        self.n_split = int(n_split)
         self.tag = tag
         self._own_ws = ws is None
         self.ws = ws or Workspace(rt)
@@ -700,6 +703,7 @@ class Attention:
         rt.memset(self.vt, 0, dim * max_len * 4)
         self.scores = self.ws.buffer(tag + ".scores", max_len * 4)
         self.probs = self.ws.buffer(tag + ".probs", max_len * 4)
+        self.part = self.ws.buffer(tag + ".part", dim * n_split * 4)
         self.out = self.ws.buffer(tag + ".out", dim * 4)
         self.q = self.ws.buffer(tag + ".q", dim * 4)
         self.length = 0
@@ -742,21 +746,40 @@ class Attention:
         n_kv = self.length if n_kv is None else int(n_kv)
         if n_kv <= 0:
             raise ValueError("n_kv 必须为正")
-        L = self.max_len
+        # 只算「当前长度向上取整到 64」这么多列：缓存没填满时**不要**按
+        # max_len 算（那会做几十倍无用功——softmax 是行扫描，代价正比于列数）。
+        pad = -(-n_kv // 64) * 64
         # 1) scores = K·q（K 当权重矩阵：行=位置，列=dim）
-        self.rt.launch("gemv_f32_warp_k", L, 64,
-                       [self.k, int(q_dev), self.scores, L, self.dim, 64])
+        self.rt.launch("gemv_f32_warp_k", pad, 64,
+                       [self.k, int(q_dev), self.scores, pad, self.dim, 64])
         # 2) 尾部掩码 + 缩放
-        if L > n_kv:
-            self.rt.launch("fill_k", -(-(L - n_kv) // 64), 64,
-                           [self.scores + n_kv * 4, -1e30, L - n_kv])
-        self.rt.launch("scale_mul_k", -(-L // 64), 64,
-                       [self.scores, 1.0 / float(self.dim) ** 0.5, L])
+        if pad > n_kv:
+            self.rt.launch("fill_k", -(-(pad - n_kv) // 64), 64,
+                           [self.scores + n_kv * 4, -1e30, pad - n_kv])
+        self.rt.launch("scale_mul_k", -(-pad // 64), 64,
+                       [self.scores, 1.0 / float(self.dim) ** 0.5, pad])
         # 3) softmax
-        self.rt.launch("softmax_k", 1, 64, [self.probs, self.scores, 1, L, 64])
-        # 4) out = Vt·P（Vt 当权重矩阵：行=dim，列=位置）
-        self.rt.launch("gemv_f32_warp_k", self.dim, 64,
-                       [self.vt, self.probs, self.out, self.dim, L, 64])
+        self.rt.launch("softmax_k", 1, 64, [self.probs, self.scores, 1, pad, 64])
+        # 4) out = Vt·P。两条路：
+        #    * pad == max_len（缓存填满）→ `gemv_f32_warp_k` 把 Vt 当权重矩阵；
+        #    * 否则用 `attn_pv_part`（支持自定义行距，只扫 pad 列）+ 归约——
+        #      `gemv_f32_warp_k` 的行距必须等于列数，缓存没填满时只能用前者。
+        if pad == self.max_len:
+            self.rt.launch("gemv_f32_warp_k", self.dim, 64,
+                           [self.vt, self.probs, self.out, self.dim, pad, 64])
+        else:
+            # 块数必须整除 pad，否则会有列没被扫到（实测 pad=320、nb=128 时
+            # 只覆盖 256 列 → 结果错误）。取「不超过 n_split 且能整除 pad 的
+            # 最大 2 的幂」；pad 是 64 的倍数，所以至少能取到 64。
+            nb = 1
+            while nb * 2 <= self.n_split and pad % (nb * 2) == 0:
+                nb *= 2
+            sh = nb.bit_length() - 1
+            self.rt.launch("attn_pv_part", -(-self.dim * nb // 64), 64,
+                           [self.part, self.probs, self.vt, pad, self.max_len,
+                            sh, pad // nb])
+            self.rt.launch("reduce_blocks_k", -(-self.dim // 64), 64,
+                           [self.part, self.out, self.dim, nb])
         if sync:
             self.rt.sync()
         return self.out
