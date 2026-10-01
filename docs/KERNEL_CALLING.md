@@ -491,6 +491,12 @@ rt.launch("reduce_blocks_k", (rows + 63) // 64, 64, [pp, py, rows, nbpr])
 
 ### 6.5 RT4：W4A8 / W4A4 解码 GEMV
 
+> compressed-tensors INT4 的 `weight_packed` 与这里的 q 区字节布局一致，
+> 只需把 offset-binary 码转成两补码、BF16 尺度转 f16，就能走同一条
+> W4A8/W4A4 通路：`k100lc_kernels.quant.ct_int4_to_rt4` 做转换，
+> `model.Int4Linear(..., "w4a8")` 把它包成线性层。实测 `17408×5120`
+> M=1 从 W4A16 的 0.247 ms 降到 **0.098 ms**（2.5×）。
+
 RT4 一层的权重是 `int4 q + f16 尺度`。高层封装：
 
 ```python

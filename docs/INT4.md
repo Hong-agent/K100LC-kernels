@@ -197,6 +197,34 @@ rt.sync()
 [`KERNEL_CALLING.md`](KERNEL_CALLING.md) 第 6.5 节。本包的 `int4_dot_k`
 走的是**保精度**的 W4A16：激活不量化，数值上只差 f32 舍入。
 
+### 5.4 切到 W4A8 / W4A4 最快通路
+
+compressed-tensors 的 `weight_packed` 与 RT4 的 q 区在字节布局上完全一致
+（低半字节 = 偶数 k），只差半字节取值（offset-binary vs 两补码）和尺度
+类型（BF16 vs f16）。因此可以**每层转换一次**，然后直接走本卡最快的
+打包点积通路：
+
+```python
+from k100lc_kernels import Int4Linear
+
+lin8 = Int4Linear(rt, n, k, packed, scale_bf16, "w4a8", ws, "gate_w4a8")
+lin4 = Int4Linear(rt, n, k, packed, scale_bf16, "w4a4", ws, "gate_w4a4")
+```
+
+实测（`17408×5120`，M=1）：
+
+| 路径 | 每层 | 等效带宽 | 相对 f32 | 相对 f32 参考误差 |
+|---|---:|---:|---:|---:|
+| f32 | 0.699 ms | 510 GB/s | 1.00× | 9.1e-7 |
+| `int4_dot_k`（W4A16） | 0.247 ms | 186 GB/s | 2.83× | 1.2e-1 |
+| `gemv_w4a8`（转换后） | **0.098 ms** | 470 GB/s | **7.15×** | 1.2e-1 |
+| `gemv_w4a4`（转换后） | **0.089 ms** | 514 GB/s | **7.81×** | 1.5e-1 |
+
+这里的误差都以 INT4 权重本身为主；W4A8 额外把激活量化到 int8，只多约
+0.5%~0.8% 的相对误差（`examples/python_model_layer.py` 测得 8.1e-3）。
+预填充（M 是 128 的倍数）会自动走 W4A4 GEMM：同一形状 M=128 从
+28.8 ms（W4A16）降到 **0.561 ms**（20.3 TMAC/s）。
+
 ## 6. 限制
 
 * 假设 `K % 128 == 0`，且尺度是 BF16、每 128 个 k 一个（这类

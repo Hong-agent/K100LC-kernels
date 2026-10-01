@@ -24,8 +24,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "tools"))
 
-from k100lc_kernels import (DotLinear, F32Linear, MLP, MoECombine, RMSNorm,  # noqa: E402
-                            Runtime, Workspace, dequant_int4_group128,
+from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, MLP, MoECombine,  # noqa: E402
+                            RMSNorm, Runtime, Workspace, dequant_int4_group128,
                             pack_int4_group128)
 from iq_dequant import dequant_iq4_nl, dequant_q4_0_fast  # noqa: E402
 
@@ -165,6 +165,33 @@ def run_gguf(rt: Runtime, dim: int, rng: np.random.Generator) -> None:
     ws.free()
 
 
+def run_int4_fast(rt: Runtime, rows: int, dim: int, ffn: int,
+                  rng: np.random.Generator) -> None:
+    """INT4 的三条通路：W4A16（原字节）/ W4A8 / W4A4（转换后）。
+
+    参考 = INT4 反量化权重 × f32 激活；W4A8/W4A4 的误差只剩激活量化。
+    """
+    ws = Workspace(rt)
+    x = rng.standard_normal((rows, dim), dtype=np.float32)
+    w = rng.normal(0, 0.05, (ffn, dim)).astype(np.float32)
+    packed, scales = pack_int4_group128(w)
+    ref = x @ dequant_int4_group128(packed, scales, ffn, dim).T
+    cases = [
+        ("w4a16", DotLinear(rt, ffn, dim, "int4", packed, (scales,), ws, "w4a16"), 1e-4),
+        ("w4a8", Int4Linear(rt, ffn, dim, packed, scales, "w4a8", ws, "w4a8"), 3e-2),
+        ("w4a4", Int4Linear(rt, ffn, dim, packed, scales, "w4a4", ws, "w4a4"), 3e-1),
+    ]
+    for name, layer, tol in cases:
+        out = layer.forward(x)
+        err = _rel(out, ref)
+        if err > tol:
+            FAILURES.append(name)
+        t = _bench(lambda: layer.forward(x), 20)
+        print(f"[{name:5s}] rows={rows} n={ffn} k={dim} max_rel={err:.2e} "
+              f"time={t:.3f} ms")
+    ws.free()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=4)
@@ -179,6 +206,7 @@ def main() -> int:
     run_int4(rt, args.rows, args.dim, args.ffn, rng)
     run_moe(rt, args.rows, args.dim, args.moe_exp, rng)
     run_gguf(rt, args.dim, rng)
+    run_int4_fast(rt, args.rows, args.dim, args.ffn, rng)
     if FAILURES:
         print("失败:", ", ".join(FAILURES))
         return 1

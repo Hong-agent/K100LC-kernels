@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.2.0
+
+INT4 推理性能强压榨：把 compressed-tensors INT4 切到 W4A8/W4A4 打包点积通路。
+
+### 新增
+
+- `Int4Linear`：同一份 compressed-tensors INT4 权重可选三条通路
+  `w4a16`（原字节）/ `w4a8` / `w4a4`；预填充自动走 W4A4 GEMM，也可用
+  `prefill="gemv"` 换更高精度。
+- `quant.ct_int4_to_rt4` / `ct_int4_to_twos_complement` /
+  `int4_scale_group_first_f32`：offset-binary INT4 → RT4 两补码布局 +
+  f16 尺度的主机侧转换。
+- `model.run_sequence`：把整段前向连续入队、只 sync 一次。
+- `tools/bench_model_paths.py` 扩展为 f32 / W4A16 / W4A8 / W4A4 / 预填充
+  GEMM 五路对比，并报相对 f32 参考误差。
+
+### 实测（`N=17408 K=5120`，合成权重）
+
+| 路径 | 权重显存 | M=1 | M=4 | 相对 f32 |
+|---|---:|---:|---:|---:|
+| f32 | 356.5 MB | 0.699 ms | 2.799 ms | 1.00× |
+| INT4 W4A16 | 46.0 MB | 0.247 ms | 0.945 ms | 2.8× |
+| INT4 W4A8 | 46.0 MB | **0.098 ms** | **0.156 ms** | **7.2× / 17.9×** |
+| INT4 W4A4 | 46.0 MB | **0.089 ms** | **0.152 ms** | **7.8× / 18.5×** |
+| 预填充 M=128（W4A4 GEMM） | 46.0 MB | 0.561 ms / 20.3 TMAC/s | — | 158× |
+
+- 400 层权重流：f32 279.6 ms/token → W4A8 39.2 ms/token → W4A4
+  35.6 ms/token。
+- 整段前向一次 sync（而不是逐层 sync）：W4A8 每层 99.0 us → 81.4 us。
+- 精度：W4A16 与原权重误差只来自 INT4 量化；W4A8 额外约 0.5~0.8%
+  （激活 int8），W4A4 约 1e-1（激活 int4）。
+
+### 验证
+
+- `python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024`：
+  f32 / INT4 / MoE / GGUF / W4A16 / W4A8 / W4A4 全部对账通过。
+- `tools/bench_model_paths.py` 复核 M=1 / M=4 / M=128 三档数据。
+
 ## 1.1.0
 
 模型级支持与效率优化。

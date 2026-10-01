@@ -38,8 +38,9 @@ from .runtime import Runtime
 
 __all__ = [
     "cdiv", "div_magic", "Workspace",
-    "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear",
+    "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
     "RMSNorm", "SwiGLU", "MLP", "MoECombine", "KVCache", "Sampler",
+    "run_sequence",
 ]
 
 
@@ -112,6 +113,20 @@ class Workspace:
 
     def __exit__(self, *exc) -> None:
         self.free()
+
+
+def run_sequence(rt: Runtime, ops, x_dev: int, sync: bool = True) -> int:
+    """把一串「设备指针 → 设备指针」的算子连续入队，最后只 sync 一次。
+
+    这是本包推荐的整段前向方式：GPU 每层约几十微秒到几百微秒，而
+    `sync` 会把 CPU 和 GPU 串起来；先全部入队再等一次，实测每层吞吐
+    （W4A8 17408×5120）从 99.0 us 降到 81.4 us。
+    """
+    for op in ops:
+        x_dev = op(x_dev)
+    if sync:
+        rt.sync()
+    return x_dev
 
 
 # 量化权重格式 → GPU 内核 / 块大小 / 需要的表指针
@@ -306,6 +321,98 @@ class RT4Linear:
             x = x[None, :]
         return self.runner.gemv(self.path, self.wq, self.ws_scale, x,
                                 self.n, self.k)
+
+
+class Int4Linear:
+    """compressed-tensors INT4 线性层，可选三条通路。
+
+    ================  ==========================  ===========================
+    path              内核                          实测（17408×5120, M=1）
+    ================  ==========================  ===========================
+    ``"w4a16"``       ``int4_dot_k``             0.269 ms / 171 GB/s
+    ``"w4a8"``        ``gemv_w4a8`` + int8 激活  0.103 ms / 446 GB/s（2.6×）
+    ``"w4a4"``        ``gemv_w4a4`` + int4 激活  0.089 ms / 515 GB/s（3.0×）
+    ================  ==========================  ===========================
+
+    ``w4a16`` 保持 checkpoint 原字节、精度最高；``w4a8`` / ``w4a4`` 在构造时把
+    offset-binary 码转成 RT4 的两补码布局、BF16 尺度转 f16，之后逐 token 复用。
+    预填充（M 是 128 的倍数）自动走 W4A4 GEMM（``gemm_w4a4_flat``），
+    避免逐行 GEMV。
+    """
+
+    def __init__(self, rt: Runtime, n: int, k: int, packed: bytes,
+                 scales_bf16: bytes, path: str = "w4a8",
+                 ws: Workspace | None = None, tag: str | None = None,
+                 runner=None, prefill: str = "gemm"):
+        from .quant import ct_int4_to_rt4, int4_scale_group_first_f32
+        if path not in ("w4a16", "w4a8", "w4a4"):
+            raise ValueError('path 必须是 "w4a16" / "w4a8" / "w4a4"')
+        if prefill not in ("gemm", "gemv"):
+            raise ValueError('prefill 必须是 "gemm" / "gemv"')
+        self.rt = rt
+        self.n, self.k, self.path = int(n), int(k), path
+        self.prefill = prefill
+        self.tag = tag or f"int4_{path}_{id(self):x}"
+        self._own_ws = ws is None
+        self.ws = ws or Workspace(rt)
+        self._dot = None
+        self._runner = None
+        if path == "w4a16":
+            self._dot = DotLinear(rt, n, k, "int4", packed, (scales_bf16,),
+                                  self.ws, self.tag)
+            return
+        from .rt4 import W4Runner
+        q, sf = ct_int4_to_rt4(packed, scales_bf16)
+        self.wq = self.ws.buffer(self.tag + ".wq", len(q))
+        rt.upload(self.wq, q)
+        self.ws_f16 = self.ws.buffer(self.tag + ".ws", len(sf))
+        rt.upload(self.ws_f16, sf)
+        gm = int4_scale_group_first_f32(scales_bf16, self.n, self.k)
+        self.wsc_gm = self.ws.buffer(self.tag + ".wsc", gm.nbytes)
+        rt.upload(self.wsc_gm, gm.reshape(-1))
+        self._runner = runner or W4Runner(rt)
+        self._y_cache: dict[int, int] = {}
+
+    def _y(self, rows: int) -> int:
+        y = self._y_cache.get(rows)
+        if y is None:
+            y = self.ws.buffer(self.tag + ".y", rows * self.n * 4)
+            self._y_cache[rows] = y
+        return y
+
+    def forward_device(self, x_dev: int, rows: int, sync: bool = False) -> int:
+        if self._dot is not None:
+            return self._dot.forward_device(x_dev, rows, sync=sync)
+        y = self._y(rows)
+        if rows <= 4:
+            return self._runner.gemv_device(
+                self.path, self.wq, self.ws_f16, None, self.n, self.k,
+                x_dev=x_dev, y_dev=y, m=rows, sync=sync)
+        if rows % 128 == 0 and self.n % 64 == 0 and self.prefill == "gemm":
+            return self._runner.gemm_device(
+                self.wq, self.wsc_gm, None, self.n, self.k,
+                x_dev=x_dev, c_dev=y, m=rows, sync=sync)
+        # 其它批大小：按 4 行一组走 GEMV（保持正确性）
+        for r0 in range(0, rows, 4):
+            m = min(4, rows - r0)
+            self._runner.gemv_device(
+                self.path, self.wq, self.ws_f16, None, self.n, self.k,
+                x_dev=x_dev + r0 * self.k * 4, y_dev=y + r0 * self.n * 4,
+                m=m, sync=False)
+        if sync:
+            self.rt.sync()
+        return y
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        if x.ndim == 1:
+            x = x[None, :]
+        rows = x.shape[0]
+        px = self.ws.buffer(self.tag + ".x", x.nbytes)
+        self.rt.upload(px, x.reshape(-1))
+        out = self.forward_device(px, rows, sync=True)
+        return self.rt.download(out, rows * self.n, np.float32) \
+            .reshape(rows, self.n)
 
 
 class RMSNorm:

@@ -112,9 +112,10 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
 ## 模型级支持
 
 `k100lc_kernels.model` 提供可直接组合的推理算子：`F32Linear` /
-`DotLinear`（INT4、GGUF 11 类编码）/ `RT4Linear`（W4A8、W4A4）/ `RMSNorm` /
-`SwiGLU` / `MLP` / `MoECombine` / `KVCache` / `Sampler`。权重上传一次、
-工作缓冲复用、一次 forward 只 sync 一次；启动开销从约 10 us 降到约 7 us。
+`DotLinear`（INT4、GGUF 11 类编码）/ `Int4Linear`（W4A16 / W4A8 / W4A4）/
+`RT4Linear` / `RMSNorm` / `SwiGLU` / `MLP` / `MoECombine` / `KVCache` /
+`Sampler` / `run_sequence`。权重上传一次、工作缓冲复用、整段前向只 sync
+一次；启动开销从约 10 us 降到约 7 us。
 
 ```bash
 python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024
@@ -125,8 +126,10 @@ python3 tools/bench_model_paths.py --n 17408 --k 5120 --rows 1 --iters 30
 MoE 合并 `~4.5e-8`，GGUF `q4_0` / `iq4nl` 路径 `~4e-7`。API、MoE 组装与效率实践见
 [`docs/MODEL_RUNTIME.md`](docs/MODEL_RUNTIME.md)。
 
-真实形状 `17408×5120` 的线性层基准：f32 0.701 ms/层，INT4 W4A16
-0.240 ms/层（2.93×）；400 层权重流从 280.6 ms/token 降到 95.9 ms/token。
+真实形状 `17408×5120` 的线性层基准（M=1）：f32 0.699 ms/层、INT4 W4A16
+0.247 ms/层、INT4 W4A8 **0.098 ms/层（7.15×）**、INT4 W4A4
+**0.089 ms/层（7.81×）**；400 层权重流从 279.6 ms/token 压到
+**39.2 ms/token**（W4A8）或 **35.6 ms/token**（W4A4）。
 
 ## 量化权重通路
 

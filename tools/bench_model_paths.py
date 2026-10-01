@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""模型级线性层路径基准：f32 vs compressed-tensors INT4（W4A16）。
+"""模型级线性层路径基准：f32 / INT4 W4A16 / W4A8 / W4A4 / 预填充 GEMM。
 
     source env.sh
     python3 tools/bench_model_paths.py --n 17408 --k 5120 --rows 1 --iters 50
+    python3 tools/bench_model_paths.py --n 17408 --k 5120 --rows 128 --iters 20
 
-用合成权重跑 `model.F32Linear` / `model.DotLinear`，报每层耗时、等效权重带宽，
-并按 400 个同形状层估算权重流时间。
+用合成权重跑 `model.F32Linear` / `DotLinear` / `Int4Linear`，报每层耗时、
+等效权重带宽与相对 f32 的加速比；`--rows` 是 128 的倍数时还会跑
+`Int4Linear` 的 W4A4 预填充 GEMM。
 """
 from __future__ import annotations
 
@@ -20,8 +22,8 @@ import numpy as np
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-from k100lc_kernels import (DotLinear, F32Linear, Runtime, Workspace,  # noqa: E402
-                            pack_int4_group128)
+from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, Runtime,  # noqa: E402
+                            Workspace, pack_int4_group128)
 
 
 def bench(fn, iters: int) -> float:
@@ -34,6 +36,10 @@ def bench(fn, iters: int) -> float:
     return (time.perf_counter() - t0) / iters
 
 
+def rel(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.abs(a - b).max() / max(1e-12, float(np.abs(b).max())))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=17408)
@@ -43,8 +49,9 @@ def main() -> int:
     args = ap.parse_args()
 
     rng = np.random.default_rng(2026)
-    w = rng.standard_normal((args.n, args.k), dtype=np.float32) * 0.02
+    w = (rng.standard_normal((args.n, args.k), dtype=np.float32) * 0.02)
     x = rng.standard_normal((args.rows, args.k), dtype=np.float32)
+    ref = x @ w.T
     packed, scales = pack_int4_group128(w)
     qbytes = len(packed) + len(scales)
     fbytes = w.nbytes
@@ -54,25 +61,37 @@ def main() -> int:
     px = ws.buffer("x", x.nbytes)
     rt.upload(px, x.reshape(-1))
 
-    f32 = F32Linear(rt, args.n, args.k, w, ws, "bench_f32")
-    int4 = DotLinear(rt, args.n, args.k, "int4", packed, (scales,), ws, "bench_int4")
-
-    def run_f32():
-        f32.forward_device(px, args.rows, sync=True)
-
-    def run_int4():
-        int4.forward_device(px, args.rows, sync=True)
-
-    tf = bench(run_f32, args.iters)
-    ti = bench(run_int4, args.iters)
+    layers = [
+        ("f32        ", F32Linear(rt, args.n, args.k, w, ws, "bench_f32"), fbytes),
+        ("int4 W4A16 ", DotLinear(rt, args.n, args.k, "int4", packed, (scales,),
+                                  ws, "bench_w4a16"), qbytes),
+        ("int4 W4A8  ", Int4Linear(rt, args.n, args.k, packed, scales, "w4a8",
+                                   ws, "bench_w4a8"), qbytes),
+        ("int4 W4A4  ", Int4Linear(rt, args.n, args.k, packed, scales, "w4a4",
+                                   ws, "bench_w4a4"), qbytes),
+    ]
     print(f"shape N={args.n} K={args.k} M={args.rows}")
-    print(f"  f32  weights {fbytes/1e6:7.1f} MB  {tf*1e3:7.3f} ms  "
-          f"{fbytes/tf/1e9:6.1f} GB/s  {args.n*args.k*2*args.rows/tf/1e12:6.2f} TFLOP/s")
-    print(f"  int4 weights {qbytes/1e6:7.1f} MB  {ti*1e3:7.3f} ms  "
-          f"{qbytes/ti/1e9:6.1f} GB/s  {args.n*args.k*2*args.rows/ti/1e12:6.2f} TFLOP/s"
-          f"  speedup={tf/ti:.2f}x")
-    print(f"  400 个同形状层的权重流时间：f32 {400*tf*1e3:.1f} ms/token，"
-          f"int4 {400*ti*1e3:.1f} ms/token")
+    print(f"  f32 weights {fbytes/1e6:.1f} MB, int4 weights {qbytes/1e6:.1f} MB")
+    t_f32 = None
+    for name, layer, wb in layers:
+        def run(layer=layer):
+            layer.forward_device(px, args.rows, sync=True)
+        t = bench(run, args.iters)
+        out = rt.download(layer.forward_device(px, args.rows, sync=True),
+                          args.rows * args.n, np.float32).reshape(args.rows, args.n)
+        if t_f32 is None:
+            t_f32 = t
+        print(f"  {name} {t*1e3:7.3f} ms  {wb/t/1e9:6.1f} GB/s  "
+              f"speedup={t_f32/t:5.2f}x  relerr={rel(out, ref):.3e}")
+    if args.rows >= 128 and args.rows % 128 == 0 and args.n % 64 == 0:
+        layer = layers[3][1]
+        t = bench(lambda: layer.forward_device(px, args.rows, sync=True),
+                  max(5, args.iters // 4))
+        out = rt.download(layer.forward_device(px, args.rows, sync=True),
+                          args.rows * args.n, np.float32).reshape(args.rows, args.n)
+        tmac = args.rows * args.n * args.k / t / 1e12
+        print(f"  prefill GEMM W4A4 {t*1e3:7.3f} ms  {tmac:5.1f} TMAC/s  "
+              f"relerr={rel(out, ref):.3e}")
     ws.free()
     return 0
 

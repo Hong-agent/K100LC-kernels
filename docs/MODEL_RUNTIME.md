@@ -20,6 +20,9 @@ python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024
 [moe ] rows=4 dim=512 n_exp=4 max_rel=4.50e-08 time=0.020 ms
 [gguf] q4_0   n=16 k=512 max_rel=4.04e-07
 [gguf] iq4nl  n=16 k=512 max_rel=3.46e-07
+[w4a16] rows=4 n=1024 k=512 max_rel=2.48e-07 time=0.207 ms
+[w4a8 ] rows=4 n=1024 k=512 max_rel=8.10e-03 time=0.130 ms
+[w4a4 ] rows=4 n=1024 k=512 max_rel=9.97e-02 time=0.117 ms
 全部对账通过 ✔
 ```
 
@@ -30,6 +33,7 @@ python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024
 | `Workspace` | 按 key 复用设备缓冲，避免逐层 alloc/free | — |
 | `F32Linear` | f32 权重线性层，M=1..4 每行一次 GEMV | `gemv_f32_warp_k` |
 | `DotLinear` | 量化权重原生解码 + 点积 | `*_dot_k` + `reduce_blocks_k` |
+| `Int4Linear` | compressed-tensors INT4 的三条通路（W4A16 / W4A8 / W4A4） | `int4_dot_k` 或 `gemv_w4a8/44` |
 | `RT4Linear` | RT4 INT4 权重（W4A8 / W4A4） | `quant_act*` / `gemv_w4a*` |
 | `RMSNorm` | `rmsnorm_k`，`flag=0` 使用 `w` | `rmsnorm_k` |
 | `SwiGLU` / `MLP` | 门控 MLP，kernel 连续入队 | `silu_mul_k` |
@@ -135,6 +139,47 @@ with RT4File("/path/model.rt4") as f:
 
 预填充用 `upload_weight_gemm` + `W4Runner.gemm`（M 必须是 128 的倍数）。
 
+### 3.5 把 compressed-tensors INT4 切到最快通路
+
+compressed-tensors 的 `weight_packed` 与 RT4 的 q 区在字节布局上完全一致
+（低半字节 = 偶数 k），只差半字节取值（offset-binary vs 两补码）和尺度
+类型（BF16 vs f16）。因此可以每层转换一次，然后直接用本卡最快的
+`v_dot4_i32_i8` / `v_dot8_i32_i4` 通路：
+
+```python
+from k100lc_kernels import Int4Linear
+
+# packed / scale 是 checkpoint 的 weight_packed(I32) / weight_scale(BF16) 原始字节
+fast8 = Int4Linear(rt, n, k, packed, scale, "w4a8", ws, "gate_w4a8")
+y = fast8.forward(x)          # M=1..4 解码
+
+fast4 = Int4Linear(rt, n, k, packed, scale, "w4a4", ws, "gate_w4a4")
+```
+
+实测（`17408×5120`，M=1，合成权重）：
+
+| 路径 | 每层 | 等效带宽 | 相对 f32 | 相对 f32 参考误差 |
+|---|---:|---:|---:|---:|
+| f32 | 0.699 ms | 510 GB/s | 1.00× | 9.1e-7 |
+| INT4 W4A16 | 0.247 ms | 186 GB/s | 2.83× | 1.2e-1（权重 INT4） |
+| INT4 W4A8 | **0.098 ms** | 470 GB/s | **7.15×** | 1.2e-1 |
+| INT4 W4A4 | **0.089 ms** | 514 GB/s | **7.81×** | 1.5e-1 |
+
+W4A16 与 W4A8 的误差都以权重 INT4 量化为主；W4A8 额外把激活量化到 int8，
+在同一份权重上只多约 0.5%~0.8% 的相对误差（`examples/python_model_layer.py`
+测得 `8.1e-3`），W4A4 把激活量化到 int4，误差约 1e-1。
+
+预填充（M=128，同一形状）：
+
+| 路径 | 每层 | 算力 | 相对 f32 |
+|---|---:|---:|---:|
+| f32（128 次 GEMV） | 88.6 ms | — | 1.00× |
+| INT4 W4A16（128×2 次 launch） | 28.8 ms | — | 3.08× |
+| INT4 + W4A4 GEMM | **0.561 ms** | 20.3 TMAC/s | **158×** |
+
+需要更高精度时用 `Int4Linear(..., "w4a8", prefill="gemv")`：预填充走
+W4A8 GEMV（约 0.6% 误差），代价是比 GEMM 慢约 5 倍。
+
 ## 4. MoE
 
 三件套：
@@ -194,15 +239,17 @@ idx_dev = Sampler(rt, ws).argmax_device(logits_dev, rows, vocab)
 真实形状实测（`tools/bench_model_paths.py`，`N=17408 K=5120`，
 合成权重）：
 
-| 路径 | 权重显存 | M=1 每层 | 等效带宽 | M=4 每层 |
+| 路径 | 权重显存 | M=1 每层 | M=4 每层 | 400 层 M=1 |
 |---|---:|---:|---:|---:|
-| f32 (`gemv_f32_warp_k`) | 356.5 MB | 0.701 ms | 508 GB/s | 2.799 ms |
-| INT4 W4A16 (`int4_dot_k`) | 46.0 MB | **0.240 ms** | 192 GB/s | **0.917 ms** |
+| f32 | 356.5 MB | 0.699 ms | 2.799 ms | 279.6 ms/token |
+| INT4 W4A16 | 46.0 MB | 0.247 ms | 0.945 ms | 98.8 ms/token |
+| INT4 W4A8 | 46.0 MB | **0.098 ms** | **0.156 ms** | **39.2 ms/token** |
+| INT4 W4A4 | 46.0 MB | **0.089 ms** | **0.152 ms** | **35.6 ms/token** |
 
-同一份权重，INT4 路径 M=1 快 **2.93×**、M=4 快 **3.05×**；400 个同形状层的
-权重流时间从 f32 的 **280.6 ms/token** 降到 INT4 的 **95.9 ms/token**。
-INT4 的等效带宽看起来低，是因为它受 4bit 解码指令吞吐限制（见
-[`INT4.md`](INT4.md) 第 5.3 节），不是访存限制。
+同一份权重，W4A8 相对 f32 快 **7.15×**（M=1）/ **17.9×**（M=4），
+相对原生的 W4A16 快 **2.5×**。W4A16 的等效带宽低是因为它受 4bit 解码
+指令吞吐限制（见 [`INT4.md`](INT4.md) 第 5.3 节），不是访存限制；
+W4A8/W4A4 用打包点积指令把解码成本摊掉。
 
 | 实践 | 原因 |
 |---|---|
@@ -213,6 +260,20 @@ INT4 的等效带宽看起来低，是因为它受 4bit 解码指令吞吐限制
 | 减少 launch 次数 | 实测每次 launch 固定开销约 7 us，400 层 × 多次很容易到毫秒级 |
 | 权重量化到 INT4/RT4 | 显存与带宽直接降 4~8 倍；精度换速度 |
 | MoE 用 `ids`/`stride` 一次覆盖多个专家 | 避免逐专家重复启动 |
+| **整段前向只 sync 一次** | 逐层 sync 会把 CPU/GPU 串行；W4A8 17408×5120 实测每层 99.0 us → 81.4 us |
+
+整段前向的写法（`run_sequence` 或直接手动串）：
+
+```python
+from k100lc_kernels import run_sequence
+
+# 每层：forward_device(..., sync=False) 返回新的设备指针
+y_dev = run_sequence(rt, [lambda d, l=l: l.forward_device(d, rows, sync=False)
+                          for l in layers], x_dev, sync=True)
+```
+
+不要在一个 token 的层循环里调用 `layer.forward(x)`（它带 host 上传/下载与
+sync）；只在最外层输入 token / 取 logits 时用一次。
 
 ## 8. 已知限制
 

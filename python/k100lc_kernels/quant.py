@@ -65,3 +65,38 @@ def dequant_int4_group128(packed: bytes, scales: bytes,
         codes[:, j::8] = ((words >> np.uint32(4 * j)) & np.uint32(0xF)).astype(np.int32)
     s = bf16_bits_to_f32(np.frombuffer(scales, dtype=np.uint16)).reshape(n, k // GROUP)
     return ((codes - 8).astype(np.float32) * np.repeat(s, GROUP, axis=1))
+
+
+def ct_int4_to_twos_complement(packed: bytes) -> bytes:
+    """compressed-tensors 的 offset-binary 码 → 两补码 int4 字节。
+
+    两者在字节内的位置完全一致（低半字节 = 偶数 k），只差一个常量：
+
+        code(c) = value + 8        # c ∈ [0,15]，value = c-8 ∈ [-8,7]
+        nibble(v) = v & 0xF        # 两补码编码
+
+    所以逐半字节做 `(c+8) & 0xF` 即可，等价于 `value & 0xF`。
+    转换后的字节可以直接喂给 RT4 的 `gemv_w4a8` / `gemv_w4a4`。
+    """
+    raw = np.frombuffer(packed, dtype=np.uint8)
+    lo = ((raw & 0x0F) + 8) & 0x0F
+    hi = (((raw >> 4) & 0x0F) + 8) & 0x0F
+    return (lo | (hi << 4)).astype(np.uint8).tobytes()
+
+
+def ct_int4_to_rt4(packed: bytes, scales_bf16: bytes) -> tuple[bytes, bytes]:
+    """compressed-tensors INT4 → RT4 兼容的 `(q 字节, f16 尺度字节)`。
+
+    q 区就是两补码 int4、低半字节 = 偶数 k；尺度由 BF16 转成 f16
+    （RT4 的 W4A8/W4A4 内核吃 f16 尺度）。这一步每层只做一次。
+    """
+    q = ct_int4_to_twos_complement(packed)
+    s = bf16_bits_to_f32(np.frombuffer(scales_bf16, dtype=np.uint16))
+    return q, np.ascontiguousarray(s.astype(np.float16)).tobytes()
+
+
+def int4_scale_group_first_f32(scales_bf16: bytes, n: int, k: int) -> np.ndarray:
+    """`[N, K/128]` BF16 尺度 → `[K/128, N]` f32（W4A4 GEMM 需要组优先）。"""
+    s = bf16_bits_to_f32(np.frombuffer(scales_bf16, dtype=np.uint16)) \
+        .reshape(n, k // GROUP)
+    return np.ascontiguousarray(s.T, dtype=np.float32)
