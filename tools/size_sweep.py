@@ -228,12 +228,53 @@ def g_seq_vit(s: Sweep, rng) -> None:
               int((s.get(y, n) != y0 + b[np.arange(n) % dim]).sum()))
 
 
+def g_attn(s: Sweep, rng) -> None:
+    """解码注意力 `Attention` 的尺寸扫描（dim / n_kv / max_len 三代组合）。
+
+    这条路上有三个「按长度分派」的开关，尺寸一变就会换内核，所以必须换着尺寸扫：
+
+    * `K·q`：dim 是 128 的倍数且 ≤ 512 时走 `gemv_f32_rows8_k`，否则回退；
+    * softmax：pad ≥ 2048 走分块四件套（`block_max_k`/`reduce_max1_k`/
+      `block_exp_sum_k`/`reduce_sum1_k`）+ 输出侧 `div_scalar_k`，否则
+      `softmax_vec_k`；
+    * `Vt·P`：dim%8==0 且 pad%128==0 时走 `gemv_f32_rows8_split_k`，否则
+      回退到 `attn_pv_part`/`gemv_f32_warp_k`。
+
+    覆盖点还包括：`n_kv` 不是 256 的倍数（尾部 -1e30 掩码）、`pad > n_kv`
+    （Vt 行距 = max_len > 列数）、以及 n_kv=1 这种退化情形。
+    """
+    from k100lc_kernels.model import Attention  # 延迟导入，避免无关组变慢
+
+    print("[解码注意力：dim / n_kv / max_len 扫描]")
+    for dim in (64, 128, 256):
+        for n_kv, max_len in ((1, 256), (255, 256), (300, 512), (768, 1024),
+                              (1000, 2048), (3000, 4096), (4096, 4096)):
+            if n_kv > max_len:
+                continue
+            attn = Attention(s.rt, dim=dim, max_len=max_len,
+                             tag=f"sw{dim}_{n_kv}")
+            k = rng.standard_normal((n_kv, dim)).astype(np.float32)
+            v = rng.standard_normal((n_kv, dim)).astype(np.float32)
+            q = rng.standard_normal(dim).astype(np.float32)
+            attn.append(k, v)
+            got = attn.forward(q)
+            score = (k @ q) / np.sqrt(dim)
+            e = np.exp(score - score.max())
+            ref = (e / e.sum()) @ v
+            rel = float(np.abs(got - ref).max() / max(1e-9, float(np.abs(ref).max())))
+            check(s, f"attention dim={dim} n_kv={n_kv} max_len={max_len}",
+                  0 if rel < 1e-5 else 1,
+                  f"max_rel={rel:.2e}")
+            attn.ws.free()
+
+
 GROUPS = {
     "elementwise": g_elementwise,
     "norm": g_norm,
     "gemv": g_gemv,
     "moe": g_moe_topk,
     "seq": g_seq_vit,
+    "attn": g_attn,
 }
 
 

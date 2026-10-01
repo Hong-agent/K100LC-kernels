@@ -462,6 +462,23 @@ def t_gemv_f32_warp(ctx: Ctx):
     ref = w @ x
     return judge(np.abs(ctx.get(yp, nrows) - ref).max(), ref)
 
+@case("gemv", "gemv_f32_rows8_k")
+def t_gemv_f32_rows8(ctx: Ctx):
+    """8 行 / workgroup 的 f32 GEMV（解码注意力 K·q 用的那条路）。
+
+    一个 workgroup = 1 warp：lane>>3 选行、lane&7 选行内 16 个 float 的一段，
+    行内 8 lane 只做 3 步树形归约 → 每 8 行只要 3 次 `s_barrier`
+    （`gemv_f32_warp_k` 每行 6 次）。要求 k % 128 == 0、nrows % 8 == 0。
+    """
+    nrows, k = 64, 256
+    rng = np.random.default_rng(21)
+    w = rng.standard_normal((nrows, k)).astype(np.float32)
+    x = rng.standard_normal(k).astype(np.float32)
+    wp, xp, yp = ctx.buf(w), ctx.buf(x), ctx.out(nrows)
+    ctx.launch("gemv_f32_rows8_k", nrows // 8, 64, [wp, xp, yp, nrows, k, 64])
+    ref = w @ x
+    return judge(np.abs(ctx.get(yp, nrows) - ref).max(), ref)
+
 
 @case("gemv", "gemv_i8_k")
 def t_gemv_i8(ctx: Ctx):
@@ -1081,6 +1098,111 @@ def t_vit_ln(ctx: Ctx):
     ref = (x - x.mean(axis=1, keepdims=True)) / np.sqrt(
         x.var(axis=1, keepdims=True) + eps) * w + b
     return judge(np.abs(ctx.get(py, rows * dim).reshape(rows, dim) - ref).max(), ref)
+
+@case("attn", "block_max_k")
+def t_block_max(ctx: Ctx):
+    """分块 softmax 第一步：`part[b] = max(x[b*chunk : (b+1)*chunk])`。
+
+    `(part, x, cols, sh)`，grid = 1<<sh 个 workgroup（64 lane × 4 宽载入 +
+    块内 6 步 LDS 树形归约）。`cols >> sh` 必须是 256 的倍数。
+    """
+    cols, sh = 1024, 2
+    nblk = 1 << sh
+    rng = np.random.default_rng(130)
+    x = (rng.standard_normal(cols).astype(np.float32) * 4.0)
+    part = ctx.out(nblk)
+    ctx.launch("block_max_k", nblk, 64, [part, ctx.buf(x), cols, sh])
+    got = ctx.get(part, nblk)
+    ref = x.reshape(nblk, -1).max(axis=1)
+    return judge(np.abs(got - ref).max(), ref)
+
+
+@case("attn", "reduce_max1_k")
+def t_reduce_max1(ctx: Ctx):
+    """`y[0] = max(part[0..nbpr-1])`（一 lane 读一个 + LDS 树形归约，nbpr ≤ 64）。"""
+    nbpr = 16
+    rng = np.random.default_rng(131)
+    part = (rng.standard_normal(nbpr).astype(np.float32) * 5.0)
+    py = ctx.out(1)
+    ctx.launch("reduce_max1_k", 1, 64, [ctx.buf(part), py, nbpr])
+    got = ctx.get(py, 1)
+    ref = np.array([part.max()], np.float32)
+    return judge(float(np.abs(got - ref).max()), ref)
+
+
+@case("attn", "block_exp_sum_k")
+def t_block_exp_sum(ctx: Ctx):
+    """`y = exp((x-M)*inv)`（**不归一化**）+ 分块 exp 和。
+
+    `M` 是**设备指针**（`reduce_max1_k` 的输出），不是 by-value 标量。
+    """
+    cols, sh = 1024, 2
+    nblk = 1 << sh
+    inv = float(1.0 / np.sqrt(128.0))
+    rng = np.random.default_rng(132)
+    x = (rng.standard_normal(cols).astype(np.float32) * 11.0)
+    M = float(x.max())
+    part = ctx.out(nblk)
+    py = ctx.out(cols)
+    ctx.launch("block_exp_sum_k", nblk, 64,
+               [part, py, ctx.buf(x), ctx.buf(np.array([M], np.float32)),
+                cols, sh, inv])
+    got = ctx.get(py, cols)
+    ref = np.exp((x - M) * inv)
+    psum = ctx.get(part, nblk)
+    rel = float(np.abs(got - ref).max() / max(1e-9, float(ref.max())))
+    rel2 = float(np.abs(psum.sum() - ref.sum()) / max(1e-9, float(ref.sum())))
+    assert rel < 1e-5 and rel2 < 1e-5, f"exp {rel:.2e} 分块和 {rel2:.2e}"
+    return judge(rel, np.array([1.0], np.float32))
+
+
+@case("attn", "reduce_sum1_k")
+def t_reduce_sum1(ctx: Ctx):
+    """`y[0] = Σ part[0..nbpr-1]`（分块 softmax 的 L）。"""
+    nbpr = 16
+    rng = np.random.default_rng(133)
+    part = rng.random(nbpr).astype(np.float32) * 10.0
+    py = ctx.out(1)
+    ctx.launch("reduce_sum1_k", 1, 64, [ctx.buf(part), py, nbpr])
+    got = ctx.get(py, 1)
+    ref = np.array([part.sum()], np.float32)
+    return judge(float(np.abs(got - ref).max()), ref)
+
+
+@case("attn", "div_scalar_k")
+def t_div_scalar(ctx: Ctx):
+    """`y[i] /= s[0]`（`s` 是设备指针）——分块 softmax 最后把 1/L 乘回输出。"""
+    n = 300
+    rng = np.random.default_rng(134)
+    y = rng.standard_normal(n).astype(np.float32)
+    L = 7.25
+    py = ctx.buf(y)
+    ctx.launch("div_scalar_k", (n + 63) // 64, 64,
+               [py, ctx.buf(np.array([L], np.float32)), n])
+    got = ctx.get(py, n)
+    ref = y / np.float32(L)
+    return judge(np.abs(got - ref).max(), ref)
+
+
+@case("gemv", "gemv_f32_rows8_split_k")
+def t_gemv_f32_rows8_split(ctx: Ctx):
+    """split-K 版 8 行/warp GEMV：部分和相加 == `W[:, :k]·x`。
+
+    `(w, x, part, nrows, k, stride, sh)`；`blk = blockIdx.x >> sh` 选 8 行一组、
+    `s = blockIdx.x & (2^sh-1)` 选 k 的一段，写 `part[row*2^sh + s]`。`stride`
+    是行距，所以 Vt（行距 = max_len > k）也能直接挂上去。
+    """
+    nrows, k, stride, sh = 16, 1024, 1536, 2
+    nsplit = 1 << sh
+    rng = np.random.default_rng(135)
+    w = rng.standard_normal((nrows, stride)).astype(np.float32)
+    x = rng.standard_normal(k).astype(np.float32)
+    part = ctx.out(nrows * nsplit)
+    ctx.launch("gemv_f32_rows8_split_k", (nrows // 8) * nsplit, 64,
+               [ctx.buf(w), ctx.buf(x), part, nrows, k, stride, sh])
+    got = ctx.get(part, nrows * nsplit).reshape(nrows, nsplit).sum(axis=1)
+    ref = w[:, :k] @ x
+    return judge(np.abs(got - ref).max(), ref)
 
 
 @case("attn", "attn_pv_part")

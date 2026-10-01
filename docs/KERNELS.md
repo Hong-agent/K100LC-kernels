@@ -2,7 +2,7 @@
 
 本文件由 `tools/gen_kernel_docs.py` 从 [`python/k100lc_kernels/catalog.json`](../python/k100lc_kernels/catalog.json) 自动生成，请勿手工修改。
 
-预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **124 个内核**。
+预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **131 个内核**。
 
 调用方法、grid 语义和完整示例先看 [`docs/KERNEL_CALLING.md`](KERNEL_CALLING.md)。本页只回答「某个 lookup 到底要传哪些参数」。
 
@@ -14,11 +14,12 @@
 | INT4（RT4 / compressed-tensors） | 23 |
 | 融合点积（原生量化块 × 激活） | 12 |
 | 量化解码 | 12 |
-| GEMV / GEMM | 3 |
+| GEMV / GEMM | 5 |
 | Transformer 常用算子 | 22 |
 | Attention / KV / 视觉塔 | 19 |
 | 序列模型 / 卷积 | 6 |
-| **合计** | **124** |
+| 其他 | 5 |
+| **合计** | **131** |
 
 ## 速查表
 
@@ -34,9 +35,12 @@
 | `argmax_part_k` | `buf:0:8 val:8:8 val:16:4 buf:24:8 buf:32:8` | 296 | 256 | 0 |
 | `attn_pv_part` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4` | 96 | 0 | 0 |
 | `attn_q_quant_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4 val:40:4` | 304 | 0 | 0 |
+| `block_exp_sum_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 48 | 256 | 0 |
+| `block_max_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4` | 24 | 256 | 0 |
 | `concat2_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:32:8` | 296 | 0 | 0 |
 | `conv1d_silu_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 304 | 0 | 0 |
 | `conv_state_update_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 304 | 0 | 0 |
+| `div_scalar_k` | `buf:0:8 buf:8:8 val:16:4` | 24 | 0 | 0 |
 | `embed_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4` | 296 | 0 | 0 |
 | `fa_decode_comb_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4` | 40 | 0 | 0 |
 | `fa_decode_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 buf:56:8 buf:64:8 val:72:4 val:76:4 val:80:4 val:84:4 val:88:4 val:92:4 val:96:4 val:100:4` | 104 | 648 | 0 |
@@ -52,6 +56,8 @@
 | `gemm_w4a4` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 val:40:4 val:44:4 val:48:4` | 52 | 27136 | 0 |
 | `gemm_w4a4_flat` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 val:40:4 val:44:4 val:48:4 val:52:4 val:56:4` | 64 | 27136 | 0 |
 | `gemv_f32_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 0 | 0 |
+| `gemv_f32_rows8_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 256 | 0 |
+| `gemv_f32_rows8_split_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4` | 40 | 256 | 0 |
 | `gemv_f32_warp_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 1024 | 0 |
 | `gemv_i8_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4 val:44:4 val:48:4` | 56 | 0 | 0 |
 | `gemv_w4a4<1>` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 val:40:4 val:44:4` | 48 | 0 | 0 |
@@ -132,6 +138,8 @@
 | `quant_rows_fast_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4 val:40:4 val:44:4` | 48 | 0 | 0 |
 | `quant_rows_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4 val:40:4` | 44 | 0 | 0 |
 | `reduce_blocks_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4` | 24 | 0 | 0 |
+| `reduce_max1_k` | `buf:0:8 buf:8:8 val:16:4` | 24 | 256 | 0 |
+| `reduce_sum1_k` | `buf:0:8 buf:8:8 val:16:4` | 24 | 256 | 0 |
 | `rmsnorm_gated_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4` | 296 | 128 | 0 |
 | `rmsnorm_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 296 | 128 | 0 |
 | `rope_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4 val:40:4 val:44:4 val:48:4 val:52:4` | 312 | 0 | 0 |
@@ -1934,6 +1942,37 @@
 | 4 | 28 | 4 | `by_value` | 调用方 |
 | 5 | 32 | 4 | `by_value` | 调用方 |
 
+#### `gemv_f32_rows8_k`
+
+- mangled 符号：`gemv_f32_rows8_k`
+- 签名：`gemv_f32_rows8_k`
+- kernarg：40 B，LDS：256 B，private：0 B
+
+| # | offset | size | kind | 由谁填 |
+|---:|---:|---:|---|---|
+| 0 | 0 | 8 | `global_buffer` | 调用方 |
+| 1 | 8 | 8 | `global_buffer` | 调用方 |
+| 2 | 16 | 8 | `global_buffer` | 调用方 |
+| 3 | 24 | 4 | `by_value` | 调用方 |
+| 4 | 28 | 4 | `by_value` | 调用方 |
+| 5 | 32 | 4 | `by_value` | 调用方 |
+
+#### `gemv_f32_rows8_split_k`
+
+- mangled 符号：`gemv_f32_rows8_split_k`
+- 签名：`gemv_f32_rows8_split_k`
+- kernarg：40 B，LDS：256 B，private：0 B
+
+| # | offset | size | kind | 由谁填 |
+|---:|---:|---:|---|---|
+| 0 | 0 | 8 | `global_buffer` | 调用方 |
+| 1 | 8 | 8 | `global_buffer` | 调用方 |
+| 2 | 16 | 8 | `global_buffer` | 调用方 |
+| 3 | 24 | 4 | `by_value` | 调用方 |
+| 4 | 28 | 4 | `by_value` | 调用方 |
+| 5 | 32 | 4 | `by_value` | 调用方 |
+| 6 | 36 | 4 | `by_value` | 调用方 |
+
 #### `gemv_f32_warp_k`
 
 - mangled 符号：`gemv_f32_warp_k`
@@ -3124,4 +3163,12 @@
 | 20 | 120 | 8 | `hidden_global_offset_y` | 运行时 |
 | 21 | 128 | 8 | `hidden_global_offset_z` | 运行时 |
 | 22 | 136 | 2 | `hidden_grid_dims` | 运行时 |
+
+### 其他
+
+- `block_exp_sum_k`：`buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4`
+- `block_max_k`：`buf:0:8 buf:8:8 val:16:4 val:20:4`
+- `div_scalar_k`：`buf:0:8 buf:8:8 val:16:4`
+- `reduce_max1_k`：`buf:0:8 buf:8:8 val:16:4`
+- `reduce_sum1_k`：`buf:0:8 buf:8:8 val:16:4`
 

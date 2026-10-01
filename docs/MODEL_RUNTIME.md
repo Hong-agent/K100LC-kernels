@@ -275,31 +275,29 @@ out = attn.forward(q)          # q [dim] → [dim]
 out_dev = attn.forward_device(q_dev, sync=False)
 ```
 
-内部就两条 GEMV（`gemv_f32_warp_k`）加一次 softmax：
+内部按「按长度分派」的三段拼起来（v1.8.3 起；旧的 `gemv_f32_warp_k` +
+`softmax_vec_k` 路线仍在，作为 hsaco 里没有新内核时的兜底）：
 
 | 步骤 | 实现 |
 |---|---|
-| `scores = K·q` | `scores[n] = Σ_d K[n,d]·q[d]`，**K 当权重矩阵** |
+| `scores = K·q` | `scores[n] = Σ_d K[n,d]·q[d]`，**K 当权重矩阵**；`dim % 128 == 0 且 dim ≤ 512` 时走 `gemv_f32_rows8_k`（8 行/warp），否则 `gemv_f32_warp_k` |
 | 尾部掩码 | `fill_k` 把 padding 段填 -1e30 |
-| 缩放 / softmax | `scale_mul_k`（1/√dim）+ `softmax_vec_k`（4 宽向量载入）|
-| `out = P·V` | `out[d] = Σ_j Vt[d,j]·P[j]`，**Vt 当权重矩阵** |
+| softmax | `pad ≥ 2048` 时走分块四件套：`block_max_k` → `reduce_max1_k` → `block_exp_sum_k`（写出**未归一化**的 exp）→ `reduce_sum1_k`；否则 `scale_mul_k` + `softmax_vec_k` |
+| `out = P·V` | `out[d] = Σ_j Vt[d,j]·P[j]`；`dim % 8 == 0 且 pad % 128 == 0` 时走 `gemv_f32_rows8_split_k`（split-K，16 段）+ `reduce_blocks_k`，否则 `attn_pv_part` / `gemv_f32_warp_k` |
+| 归一化 | 分块路最后用 `div_scalar_k` 把 `1/L` 乘回 `dim` 个输出（不分块时 softmax 已经归一化） |
 
-实测（`dim=128`，设备侧连续调用）：
+实测（`dim=128`，设备侧连续调用，`n_kv` 组取 30 次的中位数）：
 
-| `n_kv` / `max_len` | 1000/16384 | 4096/16384 | 16384/16384 | 32768/32768 | 1000/32768 |
-|---|---:|---:|---:|---:|---:|
-| us | 120 | 175 | 351 | 609 | 125 |
+| `n_kv` | 1000 | 4096 | 16384 | 32768 |
+|---|---:|---:|---:|---:|
+| v1.8.3（us） | 106 | 121 | 157 | 218 |
+| v1.8.2 之前（us） | 132 | 200 | 417 | 682 |
+| 加速 | 1.25× | 1.65× | 2.66× | 3.13× |
 
-注意代价正比于**当前长度向上取整到 64**，不是分配的 `max_len`：缓存没填满时
-（如 1000/32768）只花 145 us，而不是按 32768 算。
-
-瓶颈仍在「一 warp 一行」这一步：`softmax_vec_k` 虽然已经向量化（4 宽载入，
-126 us @16K，比 `softmax_k` 快 2.3 倍），但解码时只有 1 个 warp 在扫整行；`P·V`
-也只有 dim=128 个 warp。要再快得按 KV 分块（online softmax）重做这一层，
-见 [`ROADMAP.md`](../ROADMAP.md) B3。
-
-> 包里另有 `attn_pv_part`（编译器生成的 P·V 分块核，支持自定义行距）与
-> 未验证语义的 `fa_decode_*` 系列，供需要的人自行组合。
+注意代价正比于**当前长度向上取整到 256**，不是分配的 `max_len`：缓存没填满时
+（如 1000/32768）只按 1024 列算。三个「按长度分派」的开关都有回退路径，所以
+换 hsaco（旧包）或换尺寸都不会崩。拆解与踩过的坑见
+[`CHANGELOG.md`](../CHANGELOG.md) 1.8.3 与 [`ROADMAP.md`](../ROADMAP.md) B3。
 
 ## 6. 采样
 

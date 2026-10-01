@@ -416,11 +416,24 @@ rt.launch("moe_combine_gather_k", rows, 64,
 |---|---|---|---|
 | `gemv_f32_k` | `y[n] = W[n,k]·x[k]`，一 lane 一行 | `(w, x, y, nrows, k/4, 64)` | grid=nrows，wg=64 |
 | `gemv_f32_warp_k` | 同上，warp-per-row | `(w, x, y, nrows, k, 64)` | grid=nrows，wg=64 |
+| `gemv_f32_rows8_k` | 8 行 / workgroup（`k % 128 == 0`、`nrows % 8 == 0`）。一行交给 8 个 lane（`g = lane>>3`、`li = lane&7`，lane `li` 读行内 `li*16..li*16+15`），行内只做 3 步归约、每 8 行只同步 3 次 → 小 k 时比 warp-per-row 快 3~7 倍 | `(w, x, y, nrows, k, 64)` | grid=**nrows/8**，wg=64 |
+| `gemv_f32_rows8_split_k` | 同上 + split-K：workgroup 只扫 k 的一段，写**部分和** `part[row*2^sh + s]`，再由 `reduce_blocks_k` 沿段求和。`blk = blockIdx.x >> sh` 选 8 行一组、`s = blockIdx.x & (2^sh-1)` 选第几段；`stride` 是 w 的行距（可 > k，用于 `[dim, max_len]` 转置缓存） | `(w, x, part, nrows, k, stride, sh)` | grid=`(nrows/8)<<sh`，wg=64 |
 | `gemv_i8_k` | int8 权重 + f32 激活 | `(w, ws, x, y, nrows, ngroups, rowbytes, ws_stride, 64)` | grid=nrows，wg=64 |
 
 ```python
 n, k = 4096, 5120
 rt.launch("gemv_f32_warp_k", n, 64, [pw, px, py, n, k, 64])
+
+# 小 k（≤512）用 8 行/warp 版；`model.gemv_f32()` 会自己按 k 选
+nrows, k, sh = 16384, 128, 4           # k % 128 == 0, nrows % 8 == 0
+rt.launch("gemv_f32_rows8_k", nrows // 8, 64, [pw, px, py, nrows, k, 64])
+
+# split-K：nrows 很小、k 很大时（例如 Vt·P）
+#   part 要有 nrows<<sh 个 f32；最后 reduce_blocks_k(part, y, nrows, 1<<sh)
+dim, pad, stride = 128, 16384, 16384
+rt.launch("gemv_f32_rows8_split_k", (dim // 8) << sh, 64,
+          [pvt, pprobs, ppart, dim, pad, stride, sh])
+rt.launch("reduce_blocks_k", (dim + 63) // 64, 64, [ppart, py, dim, 1 << sh])
 ```
 
 ### 6.4 量化权重「原生解码 + 点积」
@@ -647,6 +660,24 @@ rt.launch("kv_append_k_k", grid, 64, pkv, pstate, px, ...)
 # ViT LayerNorm
 rt.launch("vit_ln_kernel", grid, 64, [py, px, pw, pb, rows, cols, eps])
 ```
+
+长行（整行长度 ≥ 2048）的 **softmax 分块**四件套 + 输出侧归一化
+（`Attention` 内部就是用这五条；单列行、列数必须是 256 的倍数）：
+
+```python
+# cols = pad（一个 warp 一行的老路是 softmax_vec_k，长行会被单 warp 延迟拖死）
+# 块数 = 1<<sh ≤ 64，每块 (cols>>sh) 列（256 的倍数）
+rt.launch("block_max_k", 1 << sh, 64, [ppmax, px, cols, sh])
+rt.launch("reduce_max1_k", 1, 64, [ppmax, pm, 1 << sh])          # M（设备标量）
+rt.launch("block_exp_sum_k", 1 << sh, 64,
+          [ppsum, py, px, pm, cols, sh, inv])                    # y=exp((x-M)*inv)，不归一化
+rt.launch("reduce_sum1_k", 1, 64, [ppsum, pl, 1 << sh])          # L（设备标量）
+# …… 用 py（未归一化）做完加权和后，把 1/L 乘回输出：
+rt.launch("div_scalar_k", (n + 63) // 64, 64, [py_out, pl, n])
+```
+
+注意 `block_exp_sum_k` 的 `M` 与 `div_scalar_k` 的 `s` 都是**设备指针**
+（`p m` / `p l`），不是 by-value 标量。
 
 ## 7. 用编译器写新内核并启动
 

@@ -1,5 +1,81 @@
 # Changelog
 
+## 1.8.3
+
+**解码注意力长上下文提速 2.2~3.1 倍**（`dim=128`）。拆开看，三个瓶颈各修一处，
+每次都实测：`K·q` 6.5×、softmax 组成 ~2.5×、`Vt·P` 3.7×。内核包 124 → 131。
+
+| n_kv | 改前 | 改后 | 加速 |
+|---:|---:|---:|---:|
+| 1000 | 132 us | 106 us | 1.25× |
+| 4096 | 200 us | 121 us | 1.65× |
+| 16384 | 417 us | 157 us | **2.66×** |
+| 32768 | 682 us | 218 us | **3.13×** |
+
+（`Attention.forward` 端到端，含 1 次同步；每项取 30 次的中位数。）
+
+### 新内核
+
+1. **`gemv_f32_rows8_k`——8 行 / workgroup 的 f32 GEMV**。`gemv_f32_warp_k`
+   一行一个 warp，**每行**都要做一次 6 步 LDS 归约 + 6 次 `s_barrier`，实测
+   耗时几乎与 k 无关（nrows=16384：k=128 → 126 us、k=512 → 134 us），是纯
+   同步开销。新内核把 8 行放进一个 warp（`g = lane>>3` 选行、`li = lane&7` 选
+   行内 16 个 float 的一段），行内归约只有 3 步、而且**每 8 行才同步 3 次**
+   （旧版每 8 行 48 次）。
+
+   | 形状 | `gemv_f32_warp_k` | `gemv_f32_rows8_k` | 加速 |
+   |---|---:|---:|---:|
+   | nrows=16384 k=128 | 126.0 us（66 GB/s） | **19.5 us（429 GB/s）** | 6.45× |
+   | nrows=65536 k=128 | 367.9 us（91 GB/s） | **50.8 us（660 GB/s）** | 7.24× |
+   | nrows=16384 k=512 | 134.0 us（250 GB/s） | **87.4 us（384 GB/s）** | 1.53× |
+   | nrows=16384 k=1024 | 130.9 us（513 GB/s） | 242.6 us（277 GB/s） | 0.53×（**不用**） |
+
+   k 大时新内核反而更慢（每个 workgroup 的 k 循环没有双缓冲），所以按
+   `k ≤ 512` 分派（`model.gemv_f32`）。
+
+2. **分块 softmax（`block_max_k` + `reduce_max1_k` + `block_exp_sum_k` +
+   `reduce_sum1_k` + `div_scalar_k`）**。`softmax_vec_k` 把**一整行**交给
+   **一个** warp 扫三趟，16K 列要 92 us（纯延迟）。现在把行按 256 列切块
+   （最多 64 块）并行：块内 LDS 归约求 max、跨块归约、再算
+   `exp((x-M)·inv)`（**不归一化**）、跨块求 L、最后把 `1/L` 乘回 `dim` 个
+   输出（而不是整行 `pad` 个）。归一化挪到输出侧，省掉一整趟读写。
+   两个跨块归约最初写成「lane 0 串行扫」（14.8 us，全是访存往返），改成
+   「一个 lane 读一个 + 6 步 LDS 树」后降到 8.0 us。
+
+3. **`gemv_f32_rows8_split_k`——split-K 版 8 行/warp GEMV**。`Vt·P` 的行数
+   只有 `dim`（128）、列数却是整个上下文：「一行一个 warp」只有 128 个
+   workgroup、每个还要串行 `k/64` 次访存往返（16K 实测 129 us）。split-K 把
+   列切成 `nsplit`（这里 16）段，workgroup 数变成 `(dim/8)·nsplit`，每段互相
+   独立、只扫 `pad/nsplit` 列，最后用 `reduce_blocks_k` 沿段求和：**35.3 us**。
+   行距是参数，所以「缓存填满」（行距 = pad）和「没填满」（行距 = max_len）
+   两种布局走同一条路。
+
+### 修过的坑（都在对账里现形）
+
+* **`M` 该传设备指针却按 by-value 传**。`block_exp_sum_k` 的 `M` 是
+  `reduce_max1_k` 刚写出来的值，早先把它当标量传，内核读到的其实是**指针低
+  32 位**。softmax 对平移不敏感，所以 M 是「随便一个有限值」时结果**看着还是
+  对的**；只有当那串位模式恰好是个极大的浮点数时才 exp 全下溢 → L=0 →
+  除以 0 → 整行 NaN。这个坑是靠「同一份代码换一组随机种子就 NaN」抓到的，
+  现在已经改成真正的指针参数，并把 3 个种子 × 30 组尺寸（90 个组合）扫过一遍
+  （最大相对误差 2.7e-06）。
+* 尾部掩码（`pad > n_kv` 时填 `-1e30`）与分块 max 的配合：整块都是掩码时块
+  max = `-1e30`，只要 `exp` 用的是**全局** M（真实分数），这些列自然算成 0，
+  不会出 NaN。
+
+### 验证
+
+* `tools/selftest_all.py`：63 → **70 个用例**（新增 `gemv_f32_rows8_k`、
+  `gemv_f32_rows8_split_k`、`block_max_k`、`reduce_max1_k`、`block_exp_sum_k`、
+  `reduce_sum1_k`、`div_scalar_k`）。
+* `tools/size_sweep.py` 新增 **`attn` 组**：`dim ∈ {64,128,256}` × 7 组
+  `(n_kv, max_len)`，专门盯「按长度分派」的三个开关（`k` 阈值、`pad ≥ 2048`
+  的分块 softmax、`Vt·P` 的 split-K 回退），并对账到 1e-5 以内。
+* `examples/python_model_layer.py` 的注意力用例从 3 组加到 **5 组**（新增
+  `n_kv=3000/max_len=4096`：pad > n_kv 且 Vt 行距大于列数；`n_kv=4096/max_len=4096`：
+  整块），端到端 max_rel ≤ 2e-06。
+* `bash tools/check_all.sh` 全绿（70 用例 ×2 + 尺寸扫描 + 编译器回归 + 模型对账）。
+
 ## 1.8.2
 
 编译器第七类静默算错：**跨 varying 区给 uniform（SGPR）变量赋值**。

@@ -23,6 +23,8 @@ from kernel_lab import _max_registers  # noqa: E402
 
 import gen_gemv_f32  # noqa: E402
 import gen_gemv_f32_warp  # noqa: E402
+import gen_gemv_f32_rows8  # noqa: E402
+import gen_softmax_split  # noqa: E402
 import gen_gemv_i8  # noqa: E402
 import gen_gelu_mul  # noqa: E402
 import gen_q4_0_dequant  # noqa: E402
@@ -47,7 +49,9 @@ import gen_moe_combine  # noqa: E402
 import gen_moe_route  # noqa: E402
 
 MODULES = [
-    gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_i8, gen_iq4nl_dequant, gen_iq4nl_to_i8,
+    gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_f32_rows8, gen_softmax_split,
+    gen_gemv_i8,
+    gen_iq4nl_dequant, gen_iq4nl_to_i8,
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
     gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
     gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_softmax_vec,
@@ -86,9 +90,16 @@ def main() -> int:
             "kernarg_align": 8,
             "sgpr_count": max(ngpr, 4),
             "vgpr_count": max(vgpr, 1),
-            # warp-per-row GEMV 用 LDS 做归约（64 lane × 4B）
-            "group_segment": 1024 if name in ("gemv_f32_warp_k", "softmax_k",
-                                              "softmax_vec_k", "layernorm_k") else 0,
+            # LDS 归约用量：warp-per-row GEMV / softmax / layernorm 用 64 lane×4B
+            # 的槽位（1024 是它们的实际申请量）；8 行/warp 的 GEMV 只要 256 B。
+            "group_segment": (256 if name in ("gemv_f32_rows8_k",
+                                              "gemv_f32_rows8_split_k",
+                                              "block_max_k",
+                                              "block_exp_sum_k", "reduce_max1_k",
+                                              "reduce_sum1_k") else
+                              1024 if name in ("gemv_f32_warp_k", "softmax_k",
+                                               "softmax_vec_k", "layernorm_k")
+                              else 0),
             "private_segment": 0,
         })
         print(f"  {name:22s} code={len(code):6d}B vgpr={max(vgpr, 1):3d} sgpr={max(ngpr, 4):2d}")

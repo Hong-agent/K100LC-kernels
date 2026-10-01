@@ -240,11 +240,15 @@ def run_int4_fast(rt: Runtime, rows: int, dim: int, ffn: int,
 def run_attention(rt: Runtime, dim: int, max_len: int, rng) -> None:
     """解码注意力（`Attention`）与 NumPy 参考对账 + 计时。
 
-    覆盖三种情况：`n_kv` 不是 256 的倍数（要走尾部 -1e30 掩码）、
-    `pad` 不能被切块数整除、以及缓存远没填满（代价只按当前长度算）。
+    覆盖：`n_kv` 不是 256 的倍数（走尾部 -1e30 掩码）、`pad` 不能被切块数整除、
+    缓存远没填满（代价只按当前长度算）、以及长上下文（pad ≥ 2048 时 softmax 走
+    分块路：`block_max_k`/`reduce_max1_k`/`block_exp_sum_k`/`reduce_sum1_k` +
+    输出侧 `div_scalar_k`；`Vt·P` 走 `gemv_f32_rows8_split_k`）。
     """
-    # 100/512：尾部掩码；300/1024：pad=512 的切块整除；1000/16384：缓存没填满
-    for n_kv, max_len_ in ((100, 512), (300, 1024), (1000, 16384)):
+    # 100/512：尾部掩码；300/1024：pad=512 的切块整除；1000/16384：缓存没填满；
+    # 3000/4096：pad=3072（分块 + 掩码，且 Vt 行距 4096 > 列数）；4096/4096：整块
+    for n_kv, max_len_ in ((100, 512), (300, 1024), (1000, 16384),
+                           (3000, 4096), (4096, 4096)):
         max_len = max(max_len_, n_kv)
         attn = Attention(rt, dim=dim, max_len=max_len, tag=f"attn{n_kv}")
         k = rng.standard_normal((n_kv, dim)).astype(np.float32)

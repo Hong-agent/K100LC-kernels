@@ -41,12 +41,43 @@ __all__ = [
     "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
     "RMSNorm", "SwiGLU", "MLP", "MoECombine", "MoEExperts", "KVCache", "Sampler",
     "Attention",
-    "run_sequence",
+    "run_sequence", "gemv_f32", "ROWS8_MAX_K", "SPLIT_SOFTMAX_MIN_PAD",
+    "SPLITK_VTP",
 ]
 
 
 def cdiv(a: int, b: int) -> int:
     return -(-int(a) // int(b))
+
+
+# `gemv_f32_rows8_k` 只在 k 小的时候更快：它每 8 行只做 3 次 `s_barrier`
+# （`gemv_f32_warp_k` 每行 6 次），但每个 workgroup 的 k 循环是串行的、没有
+# 双缓冲。实测（nrows=16384、f32）：k=128 → 6.5 倍、256 → 3.6 倍、384 →
+# 3.2 倍、512 → 1.5 倍、768/896 → 1.5 倍、**1024 → 0.54 倍（更慢）**，
+# 所以按 k 上限切换（512 是留了安全余量的阈值）。
+ROWS8_MAX_K = 512
+
+# 分块 softmax 的最小列数：再小的话 4 次启动的开销盖过收益（`softmax_vec_k`
+# 一行只要 1~2 轮，本身就很快）。下面用 `pad >= SPLIT_SOFTMAX_MIN_PAD` 判断。
+SPLIT_SOFTMAX_MIN_PAD = 2048
+
+# `Attention` 的 `Vt·P` 走 split-K 版（见 `forward_device` 里那段注释）；
+# 关掉它就退回「一行一个 warp」，用来做对照基准。
+SPLITK_VTP = True
+
+
+def gemv_f32(rt: Runtime, w: int, x: int, y: int, nrows: int, k: int) -> None:
+    """f32 GEMV 的分派：小 k 走 8 行/warp 版，其余走 warp-per-row。
+
+    两个内核的参数表完全相同，只是 grid 不同（行数 vs 行数/8）。
+    """
+    nrows, k = int(nrows), int(k)
+    if (nrows % 8 == 0 and k % 128 == 0 and k <= ROWS8_MAX_K
+            and rt.has("gemv_f32_rows8_k")):
+        rt.launch("gemv_f32_rows8_k", nrows // 8, 64,
+                  [w, x, y, nrows, k, 64])
+    else:
+        rt.launch("gemv_f32_warp_k", nrows, 64, [w, x, y, nrows, k, 64])
 
 
 def div_magic(d: int, max_i: int) -> int:
@@ -281,9 +312,8 @@ class F32Linear:
         b = self._bind(rows)
         out = int(out_dev) if out_dev is not None else b["out"]
         for r in range(rows):
-            self.rt.launch("gemv_f32_warp_k", self.n, 64,
-                           [self.w, int(x_dev) + r * self.k * 4,
-                            out + r * self.n * 4, self.n, self.k, 64])
+            gemv_f32(self.rt, self.w, int(x_dev) + r * self.k * 4,
+                     out + r * self.n * 4, self.n, self.k)
         if sync:
             self.rt.sync()
         return out
@@ -657,18 +687,28 @@ class Attention:
     """解码（M=1）注意力：`scores = K·q` → softmax → `P·V`。
 
     全部用**已对账**的内核拼出来，不依赖包里语义未验证的 `fa_decode_*`。
-    关键是「矩阵乘向量」这一步全部交给 `gemv_f32_warp_k`（warp-per-row、写死在
-    汇编里、实测 430 GB/s），而不是自己写标量循环：
+    每一步都按尺寸分派，长上下文（v1.8.3）会比「一行一个 warp + 单 warp
+    softmax」的老路快 2~3 倍：
 
-    ==============  ==========================================================
-    步骤            表达式 / 内核
-    ==============  ==========================================================
-    `scores=K·q`    `scores[n] = Σ_d K[n,d]·q[d]` → `gemv_f32_warp_k`（**K 当权重矩阵**）
-    尾部掩码        `fill_k`（padding 段填 -1e30）
-    缩放            `scale_mul_k`（1/√dim）
-    softmax         `softmax_k`
-    `out=P·V`       `out[d] = Σ_j Vt[d,j]·P[j]` → `gemv_f32_warp_k`（**Vt 当权重矩阵**）
-    ==============  ==========================================================
+    =================  ==========================================================
+    步骤                表达式 / 内核
+    =================  ==========================================================
+    `scores = K·q`     `scores[n] = Σ_d K[n,d]·q[d]`（**K 当权重矩阵**）→
+                       `gemv_f32_rows8_k`（8 行/warp，dim ≤ 512 且 128 的倍数）
+                       否则 `gemv_f32_warp_k`
+    尾部掩码            `fill_k`（padding 段填 -1e30）
+    softmax            `pad ≥ 2048`：`block_max_k` → `reduce_max1_k` →
+                       `block_exp_sum_k`（写出**未归一化**的 exp）→ `reduce_sum1_k`
+                       否则 `scale_mul_k` + `softmax_vec_k`
+    `out = Vt·P`       `out[d] = Σ_j Vt[d,j]·P[j]` → `gemv_f32_rows8_split_k`
+                       （split-K，16 段）+ `reduce_blocks_k`，否则
+                       `attn_pv_part` / `gemv_f32_warp_k`
+    归一化              分块路用 `div_scalar_k` 把 `1/L` 乘回 `dim` 个输出
+    =================  ==========================================================
+
+    实测 `dim=128`：n_kv=1000/4096/16384/32768 → 106/121/157/218 us
+    （v1.8.2 之前是 132/200/417/682 us）。三个分派开关都有回退路径，
+    换旧 hsaco 或换尺寸都不会崩。
 
     布局：`K [max_len, dim]` 行主序；`Vt [dim, max_len]`（**转置**，这样
     `out = Vt·P` 就是标准 GEMV）；`max_len` 必须是 64 的倍数（softmax 要求）。
@@ -709,6 +749,12 @@ class Attention:
         self.part = self.ws.buffer(tag + ".part", dim * n_split * 4)
         self.out = self.ws.buffer(tag + ".out", dim * 4)
         self.q = self.ws.buffer(tag + ".q", dim * 4)
+        # 分块 softmax（`block_max_k`/`reduce_max_k`/`block_exp_sum_k`）用的
+        # 中间量：每块一个 max/exp 和（块数 ≤ 64），加两个设备标量。
+        self.pmax = self.ws.buffer(tag + ".pmax", 64 * 4)
+        self.psum = self.ws.buffer(tag + ".psum", 64 * 4)
+        self.mval = self.ws.buffer(tag + ".mval", 4)
+        self.lsum = self.ws.buffer(tag + ".lsum", 4)
         self.length = 0
 
     def append_device(self, k_dev: int, v_dev: int, rows: int) -> None:
@@ -754,23 +800,67 @@ class Attention:
         # 向上取整到 256：`softmax_vec_k` 一个 lane 处理连续 4 列、一个 warp
         # 一轮覆盖 256 个元素（访存完全合并），实测比 `softmax_k` 快 2.3 倍。
         pad = -(-n_kv // 256) * 256
-        # 1) scores = K·q（K 当权重矩阵：行=位置，列=dim）
-        self.rt.launch("gemv_f32_warp_k", pad, 64,
-                       [self.k, int(q_dev), self.scores, pad, self.dim, 64])
-        # 2) 尾部掩码 + 缩放
+        inv = 1.0 / float(self.dim) ** 0.5
+        # 1) scores = K·q（K 当权重矩阵：行=位置，列=dim）。k=dim、行数=n_kv，
+        #    dim ≤ 512 时走 8 行/warp 的版本（每 8 行只要 3 次 s_barrier 而不是
+        #    48 次；n_kv=16384、dim=128 实测 126 us → 19.5 us，66 → 429 GB/s）。
+        gemv_f32(self.rt, self.k, int(q_dev), self.scores, pad, self.dim)
+        # 2) 尾部掩码（真正的分数不可能到 -1e30，所以最大/exp 都会忽略它们）
         if pad > n_kv:
             self.rt.launch("fill_k", -(-(pad - n_kv) // 64), 64,
                            [self.scores + n_kv * 4, -1e30, pad - n_kv])
-        self.rt.launch("scale_mul_k", -(-pad // 64), 64,
-                       [self.scores, 1.0 / float(self.dim) ** 0.5, pad])
-        # 3) softmax
-        self.rt.launch("softmax_vec_k", 1, 64,
-                       [self.probs, self.scores, 1, pad, 64])
-        # 4) out = Vt·P。两条路：
+        # 3) softmax。两条路：
+        #    * 分块（默认）：块内 LDS 归约 + 跨块归约，块之间完全并行。原来
+        #      `softmax_vec_k` 把整行交给**一个** warp 扫三趟，n_kv=16384 要
+        #      126 us；分块后每块只扫 1 轮。
+        #    * 老路（`softmax_vec_k`）：hsaco 里没有分块内核时兜底。
+        #    分块路的 `probs` 存的是**未归一化**的 exp：归一化挪到输出侧
+        #    （只除 dim 个数，而不是整行 pad 个数），最后 `div_scalar_k` 除 L。
+        split = (pad >= SPLIT_SOFTMAX_MIN_PAD
+                 and all(self.rt.has(n) for n in (
+                     "block_max_k", "reduce_max1_k", "block_exp_sum_k",
+                     "reduce_sum1_k", "div_scalar_k")))
+        if split:
+            # 块数取「≤64 且整除 pad/256」的最大 2 的幂（每块列数是 256 的倍数）
+            nblk = 1
+            while nblk * 2 <= 64 and (pad // 256) % (nblk * 2) == 0:
+                nblk *= 2
+            sh = nblk.bit_length() - 1
+            self.rt.launch("block_max_k", nblk, 64,
+                           [self.pmax, self.scores, pad, sh])
+            self.rt.launch("reduce_max1_k", 1, 64, [self.pmax, self.mval, nblk])
+            self.rt.launch("block_exp_sum_k", nblk, 64,
+                           [self.psum, self.probs, self.scores, self.mval,
+                            pad, sh, inv])
+            self.rt.launch("reduce_sum1_k", 1, 64, [self.psum, self.lsum, nblk])
+        else:
+            self.rt.launch("scale_mul_k", -(-pad // 64), 64,
+                           [self.scores, inv, pad])
+            self.rt.launch("softmax_vec_k", 1, 64,
+                           [self.probs, self.scores, 1, pad, 64])
+        # 4) out = Vt·P。三条路：
         #    * pad == max_len（缓存填满）→ `gemv_f32_warp_k` 把 Vt 当权重矩阵；
         #    * 否则用 `attn_pv_part`（支持自定义行距，只扫 pad 列）+ 归约——
         #      `gemv_f32_warp_k` 的行距必须等于列数，缓存没填满时只能用前者。
-        if pad == self.max_len:
+        #    * 优先：`gemv_f32_rows8_split_k`。这一步的行数只有 dim（128）、列数
+        #      却是整个上下文：「一行一个 warp」只有 128 个 workgroup，每个还要
+        #      串行做 k/64 次访存往返（16K 时实测 129 us）。split-K 把列切成
+        #      nsplit 段，workgroup 数变成 (dim/8)·nsplit，每段互相独立，最后
+        #      用 `reduce_blocks_k` 沿段求和。行距是参数，所以「缓存没填满」
+        #      （行距 = max_len）和「填满」两种布局都用同一条路。
+        splitk = (SPLITK_VTP and self.rt.has("gemv_f32_rows8_split_k")
+                  and self.dim % 8 == 0 and pad % 128 == 0)
+        if splitk:
+            nsplit = 1
+            while nsplit < 16 and (pad // 128) % (nsplit * 2) == 0:
+                nsplit *= 2
+            sh = nsplit.bit_length() - 1
+            self.rt.launch("gemv_f32_rows8_split_k", (self.dim // 8) * nsplit, 64,
+                           [self.vt, self.probs, self.part, self.dim, pad,
+                            self.max_len, sh])
+            self.rt.launch("reduce_blocks_k", -(-self.dim // 64), 64,
+                           [self.part, self.out, self.dim, nsplit])
+        elif pad == self.max_len:
             self.rt.launch("gemv_f32_warp_k", self.dim, 64,
                            [self.vt, self.probs, self.out, self.dim, pad, 64])
         else:
@@ -786,6 +876,10 @@ class Attention:
                             sh, pad // nb])
             self.rt.launch("reduce_blocks_k", -(-self.dim // 64), 64,
                            [self.part, self.out, self.dim, nb])
+        if split:
+            # 分块路的 probs 未归一化：把 1/L 乘回输出（dim 个数，不是 pad 个）
+            self.rt.launch("div_scalar_k", -(-self.dim // 64), 64,
+                           [self.out, self.lsum, self.dim])
         if sync:
             self.rt.sync()
         return self.out
