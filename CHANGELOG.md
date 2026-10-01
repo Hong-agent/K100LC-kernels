@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.9.11
+
+**新内核 `vt_scatter_v1_k`：单行 KV 追加 25.3 → 7.5 us（3.4 倍），一层
+0.189 → 0.181 ms/token。**
+
+解码时每个 token 只追加 **1 行** KV，但原来走的是为「一次一整块 64 行」设计的
+`vt_scatter_v_k`：它有两圈固定 64 次的循环（`for t in range(64)` 搬进 LDS、
+`for d in range(64)` 转置写出），rows=1 时 63/64 的迭代都在判条件后跳过，
+**真正要做的只有「读 1 个 K + 读 1 个 V + 两笔 store」，其余 15.8 us 全花在
+两圈空转的标量循环上**（每圈 ~64 次 SALU 依赖链）。
+
+新内核按「一个 lane 一列」直接铺开，连循环都不需要：
+
+    vt[c*ystride + y0] = k[c]        # K 转置写
+    vc[y0*dim + c]     = v[c]        # V 原样拷
+
+grid = `dim/64`、workgroup = 64。实测（dim=512、rows=1、grid=8）：
+
+| | us/次 |
+| --- | --- |
+| `vt_scatter_v_k` | 25.28 |
+| `vt_scatter_v1_k` | **7.54** ← 就是 7.3 us 的投递地板 |
+
+`FlashAttention.append_device` 在 `rows == 1`（解码）时用它，>1（预填充）仍然
+走 `vt_scatter_v_k`——那才是分块转置擅长的形状。内核包 141 → 142。
+
+### 踩到的坑：录 plan 时「按内核名找补丁点」必须认识新内核
+
+`TransformerLayer` 的 `LaunchPlan` 是录一次、之后每 token 只改几个参数。原来
+`_plan_locate` 只认 4 个内核名（`rope_apply_k` / `vt_scatter_v_k` /
+`flash_dec_part_k` / `flash_dec_comb_k`）。换成 `vt_scatter_v1_k` 之后它找不到
+追加那句话，于是 **`y0`（写到 KV 的第几列）永远不更新**——每个 token 都往第 0
+列写。神奇的是 `tools/bench_layer.py` 只计时、不看结果，跑出来 0.189 ms/token
+「看起来没变」，一点异常都没有；是 `examples/python_model_layer.py` 的逐 token
+对账（`max_rel=2.22e-07`）把它挡住的。现在 `_plan_locate` 同时认两个名字，
+`_patch_plan` 按各自的参数位置打补丁（单行版 y0 是第 7 个参数，不是第 10 个）。
+
+教训：**计时脚本不能代替对账**；改「逐 token 参数」相关的内核时，必须跑一遍
+逐 token 对账。
+
 ## 1.9.10
 
 **新内核 `rmsnorm_fast_k`：RMSNorm 单次 15.0 → 7.5 us（2.0 倍），一层

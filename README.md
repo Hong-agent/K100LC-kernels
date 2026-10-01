@@ -1,7 +1,7 @@
 # K100LC-kernels
 
 海光 **K100_LC（gfx926，wave64）** 的可复用 GPU 内核包：自研表驱动汇编器、
-**141 个预编译内核**、无 DTK 的常驻 HSA 运行时、Python / C ABI 封装，以及一个
+**142 个预编译内核**、无 DTK 的常驻 HSA 运行时、Python / C ABI 封装，以及一个
 受限 Python DSL → gfx926 汇编 → HSACO 的编译器。只依赖 `/opt/hyhal` 的 HSA
 运行时，**不依赖 DTK / hipcc / Docker**。
 
@@ -11,7 +11,7 @@
 | 文档 | 内容 |
 |---|---|
 | [`docs/KERNEL_CALLING.md`](docs/KERNEL_CALLING.md) | **内核调用方式（详细）**：Python / C ABI、参数打包、grid 语义、逐类调用配方、排错 |
-| [`docs/KERNELS.md`](docs/KERNELS.md) | 141 个内核的逐参数总表（从 catalog 自动生成） |
+| [`docs/KERNELS.md`](docs/KERNELS.md) | 142 个内核的逐参数总表（从 catalog 自动生成） |
 | [`docs/MODEL_RUNTIME.md`](docs/MODEL_RUNTIME.md) | **模型级 API**：线性层 / RMSNorm / MLP / MoE / KV / 采样与效率实践 |
 | [`docs/ABI.md`](docs/ABI.md) | kernarg 布局、动态启动、2D grid 限制 |
 | [`docs/INT4.md`](docs/INT4.md) | compressed-tensors INT4（W4A16）格式与内核用法 |
@@ -21,7 +21,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| `prebuilt/k100lc_kernels.hsaco` | 完整内核包（141 个内核），可直接加载 |
+| `prebuilt/k100lc_kernels.hsaco` | 完整内核包（142 个内核），可直接加载 |
 | `prebuilt/k100lc_base.hsaco` | 基线内核子集 |
 | `prebuilt/libfm_engine.so` | 常驻 HSA 引擎（C ABI） |
 | `prebuilt/nodtk_kernels.h` | 内核名 / 参数布局的 C 头（由 HSACO metadata 生成） |
@@ -152,7 +152,7 @@ MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简�
 | 工具 | 作用 |
 |---|---|
 | `tools/check_all.sh` | **一条命令跑完全部验证**：重建 → 产物一致性（防止改了生成器忘重建/忘提交）→ 全内核对账 → 编译器回归 → 模型级端到端。`--quick` 跳过重建 |
-| `tools/selftest_all.py` | **发货产物**（`prebuilt/` 那份 HSACO）的全内核对账基线：81 个用例覆盖约 102/141 个内核（逐元素 / 归一化 / softmax / top-k / router / MoE / GEMV / 11 类 GGUF 解码 / 融合点积 / RT4 W4A4·W4A8 / 激活量化 / NVFP4 25 个 / ViT 4 个 / `split_qkv_k` / `flash_dec_comb_k` 的尾部路径 / 自研 `rmsnorm_fast_k` / 运行时 HSACO 守卫），支持 `--group`、`--only`、`--json`、`--repeat`（查非确定性） |
+| `tools/selftest_all.py` | **发货产物**（`prebuilt/` 那份 HSACO）的全内核对账基线：82 个用例覆盖约 103/142 个内核（逐元素 / 归一化 / softmax / top-k / router / MoE / GEMV / 11 类 GGUF 解码 / 融合点积 / RT4 W4A4·W4A8 / 激活量化 / NVFP4 25 个 / ViT 4 个 / `split_qkv_k` / `flash_dec_comb_k` 的尾部路径 / 自研 `rmsnorm_fast_k` / 运行时 HSACO 守卫），支持 `--group`、`--only`、`--json`、`--repeat`（查非确定性） |
 | `tools/size_sweep.py` | **尺寸扫描**：把对过账的内核换一批尺寸再跑一遍（这张卡上出过两次尺寸相关的坑）。已查出的限制：`split_qkv_k` 行必须 ≤ 64 |
 | `tools/bench_decode.py` | 解码（M=1..4）每条权重通路的 us/层 与 GB/s |
 | `tools/bench_flash_decode.py` | 解码注意力的分项耗时：`--what forward\|part\|comb`，按 `n_kv`/`nsplit` 扫长上下文缩放 |

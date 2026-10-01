@@ -98,16 +98,18 @@ K 的跨步访问（用 LDS 做一次协作式转置，或把 KV 缓存改 f16/�
 part 30.2 us 里 7.3 是投递、comb 15.3 us 里 7.3 是投递。「层内几个内核」这个
 数字才是 B4 真正要盯的指标。
 
-**v1.9.10 第一刀已经落地**：`rmsnorm_fast_k`（自研，load 4 个一批）把 RMSNorm
-从 15.0 us 压到 7.5 us（贴着 7.3 us 地板），一层 0.211 → **0.189 ms/token**。
-同一招下一个目标是 `rope_apply_k` 和 `vt_scatter_v_k`——它们和 RMSNorm 一样
-「计算量很小、纯粹被派发出来」，单次也都在地板附近，能省的是往返。
+**v1.9.10 / v1.9.11 两刀已经落地**：`rmsnorm_fast_k`（load 4 个一批）把 RMSNorm
+15.0 → 7.5 us；`vt_scatter_v1_k`（单行追加、无循环）把 KV 追加 25.3 → 7.5 us。
+一层 decoder **0.211 → 0.181 ms/token（−14%）**。两个内核都贴着 7.3 us 的投递
+地板，说明「纯派发」的那一类已经压无可压——再往下只能靠**少派发**（融合）或
+去掉 K 的跨步访问。下一个同类候选是 `rope_apply_k`（层里 9.9 us，比地板高
+2.8 us），但它只有 16 行 × 64 列，收益有限，优先级低于 B4 融合。
 
 ### C. 特性覆盖
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| C1 | 自检覆盖其余内核 | 进行中 | **全包约 102/141**：W4 解码全通路、激活量化 4 件套、`split_qkv_k`、NVFP4 25/27（`nvfp4_quant_act` + 24 个 gemv 模板变体）、ViT 4/7（`vit_bias`/`vit_bias_s`/`vit_gelu`/`vit_ln`）。待补：Attention/KV 里 `fa_decode_*` 那 18 个（无用例、语义要从汇编逆向；模型侧的 `Attention` 已用自研内核拼出来并对账）、ViT 的 `vit_rope_kernel`/`vit_linear_f16_kernel`/`vit_attn_kernel`、序列/卷积、NVFP4 的 2 个预填充 GEMM（grid 约定未定）、`quant_rows_a8_k`、包的 `rope_k`（模型侧已有自研且已对账的 `rope_apply_k`，见 D9）。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
+| C1 | 自检覆盖其余内核 | 进行中 | **全包约 103/142**：W4 解码全通路、激活量化 4 件套、`split_qkv_k`、NVFP4 25/27（`nvfp4_quant_act` + 24 个 gemv 模板变体）、ViT 4/7（`vit_bias`/`vit_bias_s`/`vit_gelu`/`vit_ln`）。待补：Attention/KV 里 `fa_decode_*` 那 18 个（无用例、语义要从汇编逆向；模型侧的 `Attention` 已用自研内核拼出来并对账）、ViT 的 `vit_rope_kernel`/`vit_linear_f16_kernel`/`vit_attn_kernel`、序列/卷积、NVFP4 的 2 个预填充 GEMM（grid 约定未定）、`quant_rows_a8_k`、包的 `rope_k`（模型侧已有自研且已对账的 `rope_apply_k`，见 D9）。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
 | C5 | `vit_bias_s_kernel` 的第 5 个参数 | 待办（语义未查清） | 只有 `X == dim` 是干净的「按列加 bias」；X=16 时只在 `i%16 < dim` 的位置写；X=2/3/4 前 `X*dim` 个元素像 `b[i%X]` 之后就变；X=1/24 只有前 dim 个像 `b[i]`。要按列加 bias 直接用 `vit_bias_kernel`，别用这个 |
 | C7 | `split_qkv_k` 的行 ≤ 64 | 已完成 | v1.8.0 用编译器 DSL 重写了这个内核（`bid()` 一行一个 workgroup + lane 并行、`for` 行内循环），任意行宽都正确（扫描到 row=557）；同名同 ABI 替换，旧的 LLVM 版（`row>64` 静默算错）已删除 |
 | C6 | `concat2_k` 的参数语义 | 已完成（更正） | 不是缺陷：第 5 个参数 `n` 是**半长**，内核写 `2n` 个元素；按 `n` 给输出会写穿到相邻缓冲，表现为「同参数复跑结果不同」。用例已按 2n 完整对账，README 与 `KERNEL_CALLING.md` 都补了说明 |

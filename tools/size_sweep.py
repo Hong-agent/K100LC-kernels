@@ -324,6 +324,21 @@ def g_attn(s: Sweep, rng) -> None:
         ref[:, y0:y0 + rows] = v.T
         check(s, f"vt_scatter rows={rows} dim={dim} y0={y0}",
               int((s.get(pvt, dim * max_len).reshape(dim, max_len) != ref).sum()))
+    # 单行追加（解码路径）：K 转置 + V 拷贝，一次 launch、没有循环
+    for dim, max_len, y0 in ((64, 64, 0), (128, 256, 255), (256, 512, 7),
+                             (512, 256, 1), (1024, 300, 299)):
+        k = rng.standard_normal(dim).astype(np.float32)
+        v = rng.standard_normal(dim).astype(np.float32)
+        vt = np.full((dim, max_len), -7.0, np.float32)
+        vc = np.full((max_len, dim), -7.0, np.float32)
+        pvt, pvc = s.buf(vt), s.buf(vc)
+        s.run("vt_scatter_v1_k", dim // 64, 64,
+              [pvt, pvc, s.buf(k), s.buf(v), dim, max_len, y0])
+        ref_vt = vt.copy(); ref_vt[:, y0] = k
+        ref_vc = vc.copy(); ref_vc[y0] = v
+        bad = int((s.get(pvt, dim * max_len).reshape(dim, max_len) != ref_vt).sum())
+        bad += int((s.get(pvc, max_len * dim).reshape(max_len, dim) != ref_vc).sum())
+        check(s, f"vt_scatter_v1 dim={dim} y0={y0}", bad)
 
 
 GROUPS = {

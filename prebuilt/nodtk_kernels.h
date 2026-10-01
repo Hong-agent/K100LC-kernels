@@ -2415,6 +2415,16 @@ static const RtArg k_args_140[] = {
     {32u, 4u, 0},   // by_value/global
     {36u, 4u, 0},   // by_value/global
     {40u, 4u, 0},   // by_value/global
+};
+
+static const RtArg k_args_141[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 8u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
+    {40u, 4u, 0},   // by_value/global
     {44u, 4u, 0},   // by_value/global
     {48u, 4u, 0},   // by_value/global
     {52u, 4u, 0},   // by_value/global
@@ -2575,6 +2585,7 @@ static const RtKernel k_table[] = {
     {"split_qkv_k", "split_qkv_k", 21u, k_args_137, 104u, 0u, 0u},
     {"topk_k", "topk_k", 6u, k_args_138, 40u, 0u, 0u},
     {"vt_scatter_k", "vt_scatter_k", 21u, k_args_139, 96u, 16640u, 0u},
-    {"vt_scatter_v_k", "vt_scatter_v_k", 24u, k_args_140, 120u, 16640u, 0u},
+    {"vt_scatter_v1_k", "vt_scatter_v1_k", 7u, k_args_140, 48u, 0u, 0u},
+    {"vt_scatter_v_k", "vt_scatter_v_k", 24u, k_args_141, 120u, 16640u, 0u},
 };
-static const int k_table_n = 141;
+static const int k_table_n = 142;

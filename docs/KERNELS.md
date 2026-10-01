@@ -2,7 +2,7 @@
 
 本文件由 `tools/gen_kernel_docs.py` 从 [`python/k100lc_kernels/catalog.json`](../python/k100lc_kernels/catalog.json) 自动生成，请勿手工修改。
 
-预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **141 个内核**。
+预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **142 个内核**。
 
 调用方法、grid 语义和完整示例先看 [`docs/KERNEL_CALLING.md`](KERNEL_CALLING.md)。本页只回答「某个 lookup 到底要传哪些参数」。
 
@@ -18,8 +18,8 @@
 | Transformer 常用算子 | 25 |
 | Attention / KV / 视觉塔 | 19 |
 | 序列模型 / 卷积 | 6 |
-| 其他 | 9 |
-| **合计** | **141** |
+| 其他 | 10 |
+| **合计** | **142** |
 
 ## 速查表
 
@@ -169,6 +169,7 @@
 | `vit_ln_kernel` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 304 | 1024 | 0 |
 | `vit_rope_kernel` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4` | 296 | 0 | 0 |
 | `vt_scatter_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4 val:28:4 val:32:4 val:36:4` | 96 | 16640 | 0 |
+| `vt_scatter_v1_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 48 | 0 | 0 |
 | `vt_scatter_v_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4 val:44:4 val:48:4 val:52:4 val:56:4` | 120 | 16640 | 0 |
 
 ## 逐内核参数
@@ -3301,5 +3302,6 @@
 - `reduce_max1_k`：`buf:0:8 buf:8:8 val:16:4`
 - `reduce_sum1_k`：`buf:0:8 buf:8:8 val:16:4`
 - `vt_scatter_k`：`buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4 val:28:4 val:32:4 val:36:4`
+- `vt_scatter_v1_k`：`buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4`
 - `vt_scatter_v_k`：`buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4 val:44:4 val:48:4 val:52:4 val:56:4`
 

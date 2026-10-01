@@ -1015,7 +1015,16 @@ class FlashAttention:
         if self.length + rows > self.max_len:
             raise ValueError(f"KV 溢出：{self.length}+{rows} > {self.max_len}")
         off = self.length
-        if self.rt.has("vt_scatter_v_k") and self._pitch_ok():
+        if (rows == 1 and self.dim % 64 == 0
+                and self.rt.has("vt_scatter_v1_k")):
+            # 解码：一次只追加 1 行。`vt_scatter_v_k` 是为「一次一整块 64 行」
+            # 设计的，两圈固定 64 次的循环在 rows=1 时基本空转（dim=512、grid=8
+            # 实测 22.9 us，其中真活只有「1 个 K + 1 个 V + 两笔 store」）。
+            # `vt_scatter_v1_k` 按「一个 lane 一列」直接铺开、没有循环。
+            self.rt.launch("vt_scatter_v1_k", self.dim // 64, 64,
+                           [self.kt, self.v, int(k_dev), int(v_dev),
+                            self.dim, self.max_len, off])
+        elif self.rt.has("vt_scatter_v_k") and self._pitch_ok():
             cshift = (self.dim // 64).bit_length() - 1
             ntile = cdiv(rows, 64) * (self.dim // 64)
             self.rt.launch("vt_scatter_v_k", ntile, 64,
@@ -1163,13 +1172,13 @@ class TransformerLayer:
     def _plan_locate(self, calls: list) -> dict[str, int]:
         """在录下来的调用序列里定位需要打补丁的记录（按内核名）。"""
         want = {"rope_apply_k": "rope", "vt_scatter_v_k": "append",
+                "vt_scatter_v1_k": "append1",
                 "flash_dec_part_k": "part", "flash_dec_comb_k": "comb"}
         idx = {}
         for i, (kernel, _g, _w, _a) in enumerate(calls):
-            if kernel in want and want[kernel] not in idx:
-                idx[want[kernel]] = i
-        if self.rt.has("vt_scatter_v_k") and "append" not in idx:
-            idx["append"] = -1
+            key = want.get(kernel)
+            if key is not None and key not in idx:
+                idx[key] = i
         return idx
 
     def _patch_plan(self, pos: int) -> None:
@@ -1177,8 +1186,10 @@ class TransformerLayer:
         plan, idx = self._plan, self._plan_idx
         if "rope" in idx:
             plan.set_arg(idx["rope"], 7, int(pos))              # tbase
-        if idx.get("append", -1) >= 0:
+        if "append" in idx:
             plan.set_arg(idx["append"], 9, int(self.length))    # y0
+        if "append1" in idx:                                    # 单行版：y0 是第 7 个参数
+            plan.set_arg(idx["append1"], 6, int(self.length))
         if "part" in idx:
             pad, nsplit, _R = self.attn.plan(self.length + 1)
             plan.set_arg(idx["part"], 6, self.length + 1)       # n_kv

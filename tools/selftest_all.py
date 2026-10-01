@@ -1410,6 +1410,30 @@ def t_vt_scatter_v(ctx: Ctx):
     return judge(float(bad), np.array([1.0], np.float32))
 
 
+@case("attn", "vt_scatter_v1_k")
+def t_vt_scatter_v1(ctx: Ctx):
+    """单行 KV 追加 `vt_scatter_v1_k`（解码路径：每次只追 1 行）。
+
+    `(vt, vc, k, v, dim, ystride, y0)`；一个 lane 一列、没有循环：
+    `vt[d*ystride + y0] = k[d]`、`vc[y0*dim + d] = v[d]`。
+    """
+    dim, max_len, y0 = 512, 256, 7
+    rng = np.random.default_rng(171)
+    k = rng.standard_normal(dim).astype(np.float32)
+    v = rng.standard_normal(dim).astype(np.float32)
+    vt = np.full((dim, max_len), -7.0, np.float32)
+    vc = np.full((max_len, dim), -7.0, np.float32)
+    pvt, pvc = ctx.buf(vt), ctx.buf(vc)
+    ctx.launch("vt_scatter_v1_k", dim // 64, 64,
+               [pvt, pvc, ctx.buf(k), ctx.buf(v), dim, max_len, y0])
+    got_vt = ctx.get(pvt, dim * max_len).reshape(dim, max_len)
+    got_vc = ctx.get(pvc, max_len * dim).reshape(max_len, dim)
+    ref_vt = vt.copy(); ref_vt[:, y0] = k
+    ref_vc = vc.copy(); ref_vc[y0] = v
+    bad = int((got_vt != ref_vt).sum()) + int((got_vc != ref_vc).sum())
+    return judge(float(bad), np.array([1.0], np.float32))
+
+
 @case("attn", "vt_scatter_k")
 def t_vt_scatter(ctx: Ctx):
     """V 行主序 → `Vt [dim, max_len]` 转置（**编译器 + DSL 共享内存**生成的核）。
