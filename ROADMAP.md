@@ -31,7 +31,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| A1 | private_segment（scratch）内核可用 | 待办 | `gdn_k`/`gdn_k2<32>`/`fa_int4`/`vit_attn_kernel` 4 个内核 `private_segment>0`；hyhal **没有** `hsa_amd_queue_set_scratch_allocator` 符号，需要验证 ROCR 是否自动分配 scratch，再决定实现方式 |
+| A1 | private_segment（scratch）内核可用 | 部分完成 | 结论修正：hyhal 的 ROCR **有**完整 scratch 实现（`AqlQueue::DynamicScratchHandler` / `ScratchCache` / `AcquireQueueScratch`），按内核代码对象按需分配；队列层描述符恒为 0 属正常。实测猜参数投 `vit_attn_kernel` 会 fault，但 `private_segment=0` 同样 fault → 是参数越界。剩：按语义给 4 个内核造合法输入 + 写参考实现 |
 | A2 | 2D grid 的 `blockIdx.y` 可靠性 | 待办 | 真机实测第二个 y workgroup 写入不可靠；需要写一个最小复现，定位是运行时投递还是硬件/驱动 |
 | A3 | 多 HSACO 并存 | 待办 | 现在一个进程只能 `fm_init` 一份 HSACO；`tools/merge_hsacos.py` 是绕路，长期应支持多份 |
 | A4 | `Runtime.launch` 参数健壮性 | 已完成 | 支持 numpy 标量（`np.float32`/`np.int32`），之前直接 `TypeError` |

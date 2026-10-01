@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.6.1
+
+把「scratch 内核不能跑」这条已知限制查清楚了，文档按证据改写。
+
+### 结论修正
+
+原来四处文档都写着「`private_segment > 0` 的 4 个内核（`gdn_k`、
+`gdn_k2<32>`、`fa_int4`、`vit_attn_kernel`）因为运行时没接 scratch 所以会
+fault」。实测链条：
+
+1. 队列层 `amd_queue_t` 的 `scratch_backing_memory_*` 与
+   `scratch_resource_descriptor` **一直是 0**（`hsa_queue_create` 之后、
+   投递 `private_segment=4096` 的内核之后都是），而且 hyhal 的头文件与导出
+   符号里都没有 `hsa_amd_queue_set_scratch_allocator`。→ 看起来像"没接"。
+2. 但 `libhsa-runtime64.so` 里**有完整的 scratch 实现**：
+   `rocr::AMD::AqlQueue::DynamicScratchHandler<true/false>`、
+   `ScratchCache::alloc/use_reserved`、`AcquireQueueScratch`、
+   `InitScratchSRD`。它是**按内核**在投递时准备的（触发条件是内核代码对象
+   声明的 scratch 需求），所以队列层描述符恒为 0 是正常的。
+3. 因此"描述符为 0"不能当作"不能跑"的依据。
+
+### 新增 / 修改
+
+- `RT_HSART_SCRATCH_INFO=1`：打印队列的 scratch 字段（定位这类问题用）。
+- `RT_HSART_NO_SCRATCH=1`：显式拒绝投递 `private_segment > 0` 的内核。
+  默认**不拦**——按内核分配由 ROCR 负责，默认拦会误伤。
+- 若带 scratch 的内核真的 fault，会给出明确提示（而不是静默 core dump）。
+- `README.md` / `docs/ABI.md` / `docs/KERNEL_CALLING.md` /
+  `docs/MODEL_RUNTIME.md` 的已知限制改写为：这 4 个内核**尚未验证**，
+  缺的是「按语义造合法输入 + 参考实现对账」。
+
+### 实测
+
+猜参数直接投 `vit_attn_kernel` 会 `Invalid address access` 并 core dump；
+把同一组参数的 `private_segment` 改成 0 **同样** fault —— 说明那次 fault 来自
+参数越界（这 4 个内核没有参考实现，参数只能猜），不是 scratch。
+
 ## 1.6.0
 
 编译器：临时寄存器池（语句内 liveness 复用）+ 寄存器元数据收口。

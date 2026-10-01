@@ -209,9 +209,18 @@ python3 compiler/tests/test_examples.py
 
 ## 已知限制
 
-* Catalog 里 `private_segment > 0` 的内核（`gdn_k`、`gdn_k2<32>`、`fa_int4`、
-  `vit_attn_kernel`）需要 HSA queue scratch backing；当前运行时未接通 scratch，
-  直接调用可能 fault。调用前用 `info(lookup)["private_segment"]` 判断。
+* Catalog 里 `private_segment > 0` 的 4 个内核（`gdn_k`、`gdn_k2<32>`、
+  `fa_int4`、`vit_attn_kernel`）**还没有验证过**：它们的输入语义（GDN 递推 /
+  ViT attention / INT4 flash attention）在本仓库里没有参考实现，参数猜错会
+  直接 fault——用 `private_segment` 设成 0 的同一组参数复现过，所以那次 fault
+  是参数越界、不是 scratch。scratch 本身**不需要**用户操心：hyhal 的
+  ROCR 里有完整的按内核动态分配（`AqlQueue::DynamicScratchHandler` /
+  `ScratchCache` / `AcquireQueueScratch`），它按内核代码对象里的 scratch 声明
+  触发；队列层 `amd_queue_t` 的 scratch 描述符一直是 0，那是正常的
+  （这份运行时没有导出 `hsa_amd_queue_set_scratch_allocator` 那个外部入口）。
+  新增：设 `RT_HSART_SCRATCH_INFO=1` 可以打印这几个字段，`RT_HSART_NO_SCRATCH=1`
+  可以拒绝投递 `private_segment > 0` 的内核。
+  这 4 个内核要能用，缺的是**按语义造合法输入并写出参考实现对账**。
 * 当前 HSA 路径一个进程只加载一个 HSACO；多个 HSACO 先用
   `tools/merge_hsacos.py` 合并。
 * 真机实测：这套运行时投递 2D grid 时 y 维第二个 workgroup 的写入不可靠。

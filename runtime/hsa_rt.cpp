@@ -14,6 +14,7 @@
 
 #include <hsa/hsa.h>
 #include <hsa/hsa_ext_amd.h>
+#include <hsa/amd_hsa_queue.h>      // amd_queue_t：看 scratch 描述符是否被挂上
 
 #include <unistd.h>
 
@@ -256,6 +257,8 @@ void load_hsaco(const char* path) {
             path, resolved, k_table_n);
 }
 
+static void report_scratch(const char* when);      // 定义见下方「scratch 诊断」
+
 void make_queue() {
     uint32_t qsize = 0;
     HSA_CHECK(hsa_agent_get_info(g_gpu, HSA_AGENT_INFO_QUEUE_MAX_SIZE, &qsize));
@@ -264,11 +267,38 @@ void make_queue() {
     const hsa_queue_type_t qtype = (qenv && atoi(qenv)) ? HSA_QUEUE_TYPE_MULTI : HSA_QUEUE_TYPE_SINGLE;
     HSA_CHECK(hsa_queue_create(g_gpu, qsize, qtype, nullptr, nullptr,
                                UINT32_MAX, UINT32_MAX, &g_queue));
+    if (getenv("RT_HSART_SCRATCH_INFO")) report_scratch("queue_create 之后");
     for (int i = 0; i < N_SLOT; i++) {
         g_karg[i] = pool_alloc(g_karg_pool, MAX_KERNARG);
         HSA_CHECK(hsa_signal_create(1, 0, nullptr, &g_sig[i]));
         g_slot_used[i] = false;
     }
+}
+
+// ============================ scratch 诊断 ============================
+// private_segment > 0 的内核（gdn_k / gdn_k2<32> / fa_int4 / vit_attn_kernel）
+// 需要 HSA 队列给它们准备 scratch backing。hyhal 这份 libhsa-runtime64 既没有
+// 导出 `hsa_amd_queue_set_scratch_allocator`，头文件里也没有它的声明，队列创建
+// 后 `amd_queue_t` 里的 scratch 描述符是全零——也就是说这套运行时没接 scratch。
+// 这里把这几个字段读出来，方便判断「内核能不能跑」而不是让它直接 fault。
+static amd_queue_t* amdq() { return reinterpret_cast<amd_queue_t*>(g_queue); }
+
+static bool scratch_ready() {
+    if (!g_queue) return false;
+    return amdq()->scratch_backing_memory_byte_size != 0;
+}
+
+static void report_scratch(const char* when) {
+    if (!g_queue) return;
+    amd_queue_t* q = amdq();
+    fprintf(stderr, "hsa_rt: [scratch] %s: base=%#llx size=%llu lane_bytes=%u "
+                    "desc=[%#x %#x %#x %#x] priv_ap_hi=%#x\n",
+            when, (unsigned long long)q->scratch_backing_memory_location,
+            (unsigned long long)q->scratch_backing_memory_byte_size,
+            q->scratch_wave64_lane_byte_size,
+            q->scratch_resource_descriptor[0], q->scratch_resource_descriptor[1],
+            q->scratch_resource_descriptor[2], q->scratch_resource_descriptor[3],
+            q->private_segment_aperture_base_hi);
 }
 
 void ensure_registered(const void* p, size_t n) {
@@ -392,6 +422,18 @@ static void dispatch_packet(uint64_t kobj, const char* dbg_name, dim3 grid, dim3
     if (!kobj) {
         fprintf(stderr, "hsa_rt: HSACO 里没有内核 %s\n", dbg_name);
         return;
+    }
+    if (private_size > 0) {
+        // scratch 是**按内核**由 ROCR 自己备的（见下面 report_scratch 的说明），
+        // 队列里的描述符本来就一直是 0，所以这里不能拿它当「能不能跑」的依据。
+        // 只在显式要求时才拦（调试/排查用）。
+        if (getenv("RT_HSART_NO_SCRATCH")) {
+            fprintf(stderr, "hsa_rt: %s 需要 %u 字节 scratch，"
+                            "RT_HSART_NO_SCRATCH 已设置，拒绝投递。\n",
+                    dbg_name, private_size);
+            return;
+        }
+        if (getenv("RT_HSART_SCRATCH_INFO")) report_scratch("dispatch 之前");
     }
     std::lock_guard<std::mutex> lk(g_mtx);
     const int slot = g_next;
@@ -527,6 +569,7 @@ hipError_t hipDeviceSynchronize() {
                                       HSA_WAIT_STATE_ACTIVE);
     }
     g_pending = 0;
+    if (getenv("RT_HSART_SCRATCH_INFO")) report_scratch("sync 之后");
     return hipSuccess;
 }
 

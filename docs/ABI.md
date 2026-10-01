@@ -36,7 +36,7 @@ metadata 生成，结构：
 | `args` | 参数顺序、`off`、`size`、`kind` |
 | `kernarg_size` | kernarg 段大小 |
 | `group_segment` | LDS 字节数 |
-| `private_segment` | scratch 字节数；>0 的内核当前运行时无法直接跑 |
+| `private_segment` | scratch 字节数；由 hyhal 的 ROCR 按内核动态分配（见文末），调用方不用管 |
 
 `C ABI` 侧的同一份表是 `prebuilt/nodtk_kernels.h`，由
 `tools/gen_kernel_table.py` 生成。
@@ -111,9 +111,18 @@ python3 tools/make_catalog.py merged.hsaco merged.catalog.json
 
 * **2D grid 的 y 维不可靠**：实测 `quant_act` 第二行起输出错、
   `gemm_w4a4` 第二块 NaN。优先用 1D 拆行或 1D flat 内核。
-* **`private_segment > 0` 不能直接跑**：当前 HSA queue 没有接 scratch
-  backing。涉及 `gdn_k`、`gdn_k2<32>`、`fa_int4`、`vit_attn_kernel`；调用前
-  用 `info(lookup)["private_segment"]` 判断。
+* **scratch（`private_segment > 0`）不需要调用方操心**：hyhal 的 ROCR 里有
+  完整的 scratch 实现（符号表里的 `rocr::AMD::AqlQueue::DynamicScratchHandler`、
+  `ScratchCache::alloc`、`AcquireQueueScratch`），它是**按内核**在投递时准备的，
+  触发条件是内核代码对象声明的 scratch 需求。队列层 `amd_queue_t` 里的
+  `scratch_backing_memory_*` / `scratch_resource_descriptor` 一直是 0——那是
+  正常的，因为这份运行时没有导出 `hsa_amd_queue_set_scratch_allocator`
+  这个外部入口，**不能拿它当「能不能跑」的依据**。
+  涉及 `gdn_k`、`gdn_k2<32>`、`fa_int4`、`vit_attn_kernel` 这 4 个内核：
+  它们**尚未验证**，实测用猜的参数投递会 fault，但把 `private_segment` 改成 0
+  用同一组参数同样 fault——说明 fault 来自参数越界而不是 scratch。
+  诊断开关：`RT_HSART_SCRATCH_INFO=1` 打印 scratch 字段，
+  `RT_HSART_NO_SCRATCH=1` 拒绝投递这类内核。
 * **LDS 用量**：`group_segment` 大的内核（`fa_*`、`gemm_w4a4`、
   `vit_attn_kernel`）对 workgroup 大小敏感，不要随意改。
 * **只支持 `/opt/hyhal`**。

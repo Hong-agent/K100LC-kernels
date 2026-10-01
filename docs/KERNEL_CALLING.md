@@ -118,7 +118,7 @@ print([a for a in k["args"] if not a["kind"].startswith("hidden_")])
 | `args` | 参数顺序、`off` 字节偏移、`size` 字节数、`kind` |
 | `kernarg_size` | kernarg 段大小（运行时按它清零并拷贝） |
 | `group_segment` | LDS 字节数，>0 的内核在工作组内使用共享内存 |
-| `private_segment` | scratch 字节数，>0 时当前运行时未接 scratch，见第 8 节 |
+| `private_segment` | scratch 字节数，由 ROCR 按内核自动准备（见第 8 节） |
 
 `kind` 有两类：
 
@@ -630,7 +630,8 @@ rt.launch("nvfp4_gemv<1,1>", cdiv(n, 4), 256,
 调用前的两条硬性检查：
 
 1. `private_segment > 0` 的内核（`gdn_k`、`gdn_k2<32>`、`fa_int4`、
-   `vit_attn_kernel`）当前运行时没有 scratch backing，可能 fault；
+   `vit_attn_kernel`）**还没有验证**：scratch 由 hyhal 的 ROCR 按内核自动准备
+   （见 [`ABI.md`](ABI.md) 第 6 节），真正缺的是按语义构造合法输入的参考实现；
 2. `group_segment` 很大的内核（`fa_*`、`gemm_w4a4`、`vit_attn_kernel`）
    需要 LDS 能放下，调用方不要随意改 workgroup。
 
@@ -677,7 +678,7 @@ python3 tools/make_catalog.py build/merged.hsaco build/merged.catalog.json
 | `RuntimeError: fm_launch(x) 失败` | 参数个数不对 / 内核不存在 | `info(x)["args"]` 数一遍显式参数；确认 lookup 拼写 |
 | 结果全 0 或部分行错 | grid 当成总 work-item 数传了 | `Runtime.launch` 的 grid 是 workgroup 个数 |
 | 第二行 / 第二块出错 | 用了 2D grid | 改成按行拆 1D 或 1D flat 内核 |
-| 进程 fault | 内核 `private_segment > 0` | 换用无 scratch 的内核，或给 HSA queue 接 scratch backing |
+| 进程 fault | 内核 `private_segment > 0` | 那是参数越界（这 4 个内核还没有参考实现可对参数）；scratch 本身由 ROCR 按内核准备，不需要用户接 |
 | 结果随 grid 变化 | grid-stride 内核的边界判断依赖 `n` | 检查 `n` 与缓冲区大小；grid 只影响并行度 |
 | 除法结果不对 | `magic_*` 不是精确魔法数 | 用 `div_magic(d, max_i)`，且 `max_i` 覆盖最大下标 |
 | 新内核 `launch` 找不到 | 还在新 HSACO 里，没合并进 prebuilt | 用 `launch_dyn` 或先 `merge_hsacos.py` |

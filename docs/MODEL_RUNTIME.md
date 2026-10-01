@@ -320,8 +320,9 @@ sync）；只在最外层输入 token / 取 logits 时用一次。
 * `rmsnorm_k` / `softmax_k` / `layernorm_k` 要求 `dim % 64 == 0`。
 * `*_dot_k` 的 `rows_per_exp = 1`（每个 x 行一组）无法用 32 位魔法除表示；
   dense 层请传 `rows_per_exp = N`（`DotLinear` 已经这样做）。
-* `private_segment > 0` 的 GDN / `fa_int4` / `vit_attn_kernel` 当前运行时
-  没有 scratch backing，不能直接跑。
+* `private_segment > 0` 的 GDN / `fa_int4` / `vit_attn_kernel` **尚未验证**：
+  scratch 由 ROCR 按内核自动准备（`docs/ABI.md` 第 6 节有证据），缺的是按
+  语义构造合法输入的参考实现；参数猜错会 fault。
 * 2D grid 的 y 维第二个 workgroup 写入不可靠；用 1D 拆行或 flat 内核。
 * `KVCache` 是 f32 主机编排版；打包 KV 请用 `kv_append_*` 内核。
 
