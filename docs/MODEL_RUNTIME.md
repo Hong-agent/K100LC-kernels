@@ -317,7 +317,7 @@ RMSNorm → gate/up → SwiGLU → W_down → 残差`，**全程设备侧串联*
 
 实测（dim=512、8 头 × 64、ffn=1024）：**0.23 ms/token**（设备侧连续 30 个 token、
 一次 sync），逐 token 与 NumPy 参考对账 **1.9e-07**。这条路线上一个 token 约
-**11 个内核**（残差已经并进 GEMV，见下），而相邻内核之间是依赖关系——每条
+**10 个内核**（残差并进 GEMV、SwiGLU 并进 down 投影），而相邻内核之间是依赖关系——每条
 dispatch 的 GPU 侧开销实测约 7 us，所以这 0.23 ms 里大头仍是「内核数」而不是
 算力（权重 10 MB 只要 ~17 us）。下一步继续压内核数（见
 [`ROADMAP.md`](../ROADMAP.md) B4）。

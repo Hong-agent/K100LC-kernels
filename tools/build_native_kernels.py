@@ -24,6 +24,7 @@ from kernel_lab import _max_registers  # noqa: E402
 import gen_gemv_f32  # noqa: E402
 import gen_gemv_f32_warp  # noqa: E402
 import gen_gemv_f32_rows8  # noqa: E402
+import gen_gemv_f32_gated  # noqa: E402
 import gen_softmax_split  # noqa: E402
 import gen_flash_decode  # noqa: E402
 import gen_gemv_i8  # noqa: E402
@@ -50,7 +51,8 @@ import gen_moe_combine  # noqa: E402
 import gen_moe_route  # noqa: E402
 
 MODULES = [
-    gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_f32_rows8, gen_softmax_split,
+    gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_f32_rows8, gen_gemv_f32_gated,
+    gen_softmax_split,
     gen_flash_decode, gen_gemv_i8,
     gen_iq4nl_dequant, gen_iq4nl_to_i8,
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
@@ -101,7 +103,8 @@ def main() -> int:
                                               "block_exp_sum_k", "reduce_max1_k",
                                               "reduce_sum1_k") else
                               1024 if name in ("gemv_f32_warp_k",
-                                               "gemv_f32_warp_acc_k", "softmax_k",
+                                               "gemv_f32_warp_acc_k",
+                                               "gemv_f32_gated_acc_k", "softmax_k",
                                                "softmax_vec_k", "layernorm_k")
                               else 0),
             "private_segment": 0,

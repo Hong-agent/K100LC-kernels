@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.9.2
+
+**SwiGLU 融进 down 投影**：新内核 `gemv_f32_gated_acc_k`
+（`y += W·(silu(gate)·up)`），一层 decoder 从 **11 个内核降到 10 个**。
+内核包 138 → 139。
+
+### 做法
+
+门控 MLP 的尾巴原本是「`silu_mul_k` + `down` GEMV（+ 残差累加）」两个内核，
+而 `down` 的输入 `act[j] = silu(g[j])·u[j]` 完全可以在**读进来的那一步**算：
+
+```
+y[row] += Σ_j W[row, j] · silu(g[j]) · u[j]
+```
+
+结构照 `gemv_f32_warp_k`（warp-per-row、lane 交错读、LDS 树形归约），每轮多读
+一路 `u`、多算一次 silu（`v_exp_f32` 是 2^x，所以先乘 `-log2(e)` 算 `exp(-g)`，
+再 `1+t`、`v_rcp_f32`、乘 `g`、乘 `u`），最后 `v_fma_f32` 累加 —— 残差也一起
+进来了。旧 hsaco 缺这颗内核时 `TransformerLayer` 退回「silu_mul + 累加 GEMV」。
+
+### 实测（`dim=512、8 头 × 64、ffn=1024`）
+
+| | 数值 |
+|---|---:|
+| `silu_mul_k` + `gemv_f32_warp_acc_k`（两步、两次 dispatch） | 37.4 us |
+| `gemv_f32_gated_acc_k`（一步） | **19.0 us** |
+| 新内核单测（y0 + W·(silu(g)·u)） | 64×256 / 128×1024 / 512×1024 / 65×512 全部 ≤6e-07 |
+| 一层 decoder 的内核数 | 11 → **10** |
+| 一层设备侧（一次 sync，30 token） | 0.232 ms/token（三次测量 0.230/0.232/0.243） |
+
+注：整层的 wall 时间这次没有明显变化 —— 内核少了 1 个、但那 18 us 的节省被
+这条链上其它内核的延迟吃掉了（每 token 10 个内核 × 每内核 ~20 us 仍是大头）。
+`gemv_f32_gated_acc_k` 本身的收益（18 us/次）是确定的，后续把 MLP 的
+gate/up 也并进来时会更明显。
+
+### 验证
+
+* `tools/selftest_all.py` 76 → **77 个用例**（新增 `gemv_f32_gated_acc_k`）；
+* `examples/python_model_layer.py` 的 `run_transformer_layer` 逐 token 对账
+  max_rel **1.76e-07**（8 个 token，缓存增长中）；
+* `bash tools/check_all.sh` 全绿。
+
 ## 1.9.1
 
 **残差并进 GEMV**：两个累加变体 `gemv_f32_rows8_acc_k` / `gemv_f32_warp_acc_k`

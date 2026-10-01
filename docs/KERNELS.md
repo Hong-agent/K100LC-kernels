@@ -2,7 +2,7 @@
 
 本文件由 `tools/gen_kernel_docs.py` 从 [`python/k100lc_kernels/catalog.json`](../python/k100lc_kernels/catalog.json) 自动生成，请勿手工修改。
 
-预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **138 个内核**。
+预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **139 个内核**。
 
 调用方法、grid 语义和完整示例先看 [`docs/KERNEL_CALLING.md`](KERNEL_CALLING.md)。本页只回答「某个 lookup 到底要传哪些参数」。
 
@@ -14,12 +14,12 @@
 | INT4（RT4 / compressed-tensors） | 23 |
 | 融合点积（原生量化块 × 激活） | 12 |
 | 量化解码 | 12 |
-| GEMV / GEMM | 7 |
+| GEMV / GEMM | 8 |
 | Transformer 常用算子 | 23 |
 | Attention / KV / 视觉塔 | 19 |
 | 序列模型 / 卷积 | 6 |
 | 其他 | 9 |
-| **合计** | **138** |
+| **合计** | **139** |
 
 ## 速查表
 
@@ -57,6 +57,7 @@
 | `gelu_mul_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4` | 32 | 0 | 0 |
 | `gemm_w4a4` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 val:40:4 val:44:4 val:48:4` | 52 | 27136 | 0 |
 | `gemm_w4a4_flat` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 val:40:4 val:44:4 val:48:4 val:52:4 val:56:4` | 64 | 27136 | 0 |
+| `gemv_f32_gated_acc_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 48 | 1024 | 0 |
 | `gemv_f32_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 0 | 0 |
 | `gemv_f32_rows8_acc_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 256 | 0 |
 | `gemv_f32_rows8_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 256 | 0 |
@@ -1933,6 +1934,22 @@
 | 3 | 20 | 4 | `by_value` | 调用方 |
 
 ### GEMV / GEMM
+
+#### `gemv_f32_gated_acc_k`
+
+- mangled 符号：`gemv_f32_gated_acc_k`
+- 签名：`gemv_f32_gated_acc_k`
+- kernarg：48 B，LDS：1024 B，private：0 B
+
+| # | offset | size | kind | 由谁填 |
+|---:|---:|---:|---|---|
+| 0 | 0 | 8 | `global_buffer` | 调用方 |
+| 1 | 8 | 8 | `global_buffer` | 调用方 |
+| 2 | 16 | 8 | `global_buffer` | 调用方 |
+| 3 | 24 | 8 | `global_buffer` | 调用方 |
+| 4 | 32 | 4 | `by_value` | 调用方 |
+| 5 | 36 | 4 | `by_value` | 调用方 |
+| 6 | 40 | 4 | `by_value` | 调用方 |
 
 #### `gemv_f32_k`
 

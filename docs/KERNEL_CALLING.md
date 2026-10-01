@@ -433,6 +433,9 @@ rt.launch("gemv_f32_rows8_k", nrows // 8, 64, [pw, px, py, nrows, k, 64])
 #   （`model.gemv_f32_acc()` 会自己选）
 rt.launch("gemv_f32_rows8_acc_k", nrows // 8, 64, [pw, px, py, nrows, k, 64])
 
+# 门控 MLP 的最后一步：y += W·(silu(gate) * up)（SwiGLU 直接融进 down 投影）
+rt.launch("gemv_f32_gated_acc_k", nrows, 64, [pw, pgate, pup, py, nrows, k, 64])
+
 # split-K：nrows 很小、k 很大时（例如 Vt·P）
 #   part 要有 nrows<<sh 个 f32；最后 reduce_blocks_k(part, y, nrows, 1<<sh)
 dim, pad, stride = 128, 16384, 16384

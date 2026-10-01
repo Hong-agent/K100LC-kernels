@@ -1229,10 +1229,15 @@ class TransformerLayer:
         gemv_f32_acc(rt, self.o.w, attn, self.h, self.dim, self.dim)
         n2 = self.norm2.forward_device(self.h, 1, sync=False)
         gu = self.gate_up.forward_device(n2, 1, sync=False)
-        act = self.act.forward_device(gu, gu + self.ffn * 4, self.ffn,
-                                      out_dev=self.acc)
-        # 残差并进 down 投影：h += W_down·act
-        gemv_f32_acc(rt, self.down.w, act, self.h, self.dim, self.ffn)
+        if rt.has("gemv_f32_gated_acc_k"):
+            # SwiGLU 也融进 down 的 GEMV：h += W_down·(silu(gate)*up)
+            rt.launch("gemv_f32_gated_acc_k", self.dim, 64,
+                      [self.down.w, gu, gu + self.ffn * 4, self.h, self.dim,
+                       self.ffn, 64])
+        else:                       # 旧 hsaco：silu_mul + 累加 GEMV 两步
+            act = self.act.forward_device(gu, gu + self.ffn * 4, self.ffn,
+                                          out_dev=self.acc)
+            gemv_f32_acc(rt, self.down.w, act, self.h, self.dim, self.ffn)
         return self.h
 
     def forward(self, x: np.ndarray, pos: int, sync: bool = True):

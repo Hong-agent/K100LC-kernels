@@ -462,6 +462,22 @@ def t_gemv_f32_warp(ctx: Ctx):
     ref = w @ x
     return judge(np.abs(ctx.get(yp, nrows) - ref).max(), ref)
 
+@case("gemv", "gemv_f32_gated_acc_k")
+def t_gemv_f32_gated(ctx: Ctx):
+    """门控累加 GEMV：`y += W·(silu(gate) * up)`（把 SwiGLU 融进 down 投影）。"""
+    nrows, k = 128, 512
+    rng = np.random.default_rng(182)
+    w = rng.standard_normal((nrows, k)).astype(np.float32)
+    g = rng.standard_normal(k).astype(np.float32)
+    u = rng.standard_normal(k).astype(np.float32)
+    y0 = rng.standard_normal(nrows).astype(np.float32)
+    wp, gp, up_, yp = ctx.buf(w), ctx.buf(g), ctx.buf(u), ctx.buf(y0)
+    ctx.launch("gemv_f32_gated_acc_k", nrows, 64, [wp, gp, up_, yp, nrows, k, 64])
+    act = (g / (1.0 + np.exp(-g))) * u
+    ref = (y0 + w @ act).astype(np.float32)
+    return judge(np.abs(ctx.get(yp, nrows) - ref).max(), ref)
+
+
 @case("gemv", "gemv_f32_rows8_acc_k")
 def t_gemv_f32_rows8_acc(ctx: Ctx):
     """`y += W·x`（残差并进 GEMV）——8 行/warp 版的累加变体。"""
