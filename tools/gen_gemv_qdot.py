@@ -364,6 +364,24 @@ def _dot_fma4(L, elem):
         L.append(f"v_fma_f32 v{DOT_ACC[j]}, v{40 + j}, v{64 + j}, v{DOT_ACC[j]}")
 
 
+def _dot_fma4_reg(L, xreg):
+    """同 `_dot_fma4`，但激活已经在寄存器里（由子块开头的批量预载负责）。"""
+    for j in range(4):
+        L.append(f"v_fma_f32 v{DOT_ACC[j]}, v{40 + j}, v{xreg + j}, v{DOT_ACC[j]}")
+
+
+def _xpreload(L, em, sub: int) -> None:
+    """把一个 32 元素子块（128 B）的激活一次发出去：8 条 dwordx4，无中间等待。
+
+    原来每个 `_dot_fma4` 都自带一条 `s_waitcnt vmcnt(0)`（等**所有**未完成载入），
+    一个子块要串行等 8 次；iq2s 整块 138 次、iq3xxs 170 次。批量之后每个子块
+    只等一次。
+    """
+    for i in range(8):
+        em(f"global_load_dwordx4 v[{XREG + 4 * i}:{XREG + 4 * i + 3}], v[6:7], "
+           f"off offset:{128 * sub + 16 * i}")
+
+
 def gen_iq2s_dot_asm() -> str:
     L: list[str] = []
     em = L.append
@@ -386,6 +404,7 @@ def gen_iq2s_dot_asm() -> str:
     for ib in range(8):
         em(f"global_load_ubyte v13, v[4:5], off offset:{66 + ib}")
         em(f"global_load_ubyte v15, v[4:5], off offset:{74 + ib}")
+        _xpreload(L, em, ib)
         em("s_waitcnt vmcnt(0)")
         for reg, sh, mul in (("v44", 0, None), ("v45", 4, None)):
             if sh:
@@ -415,10 +434,10 @@ def gen_iq2s_dot_asm() -> str:
             for j in range(4):
                 _iq23_value(L, "v33", j, scale, f"v{40 + j}")
             elem = ib * 32 + 8 * l
-            _dot_fma4(L, elem)
+            _dot_fma4_reg(L, XREG + 4 * (2 * l))
             for j in range(4):
                 _iq23_value(L, "v34", 4 + j, scale, f"v{40 + j}")
-            _dot_fma4(L, elem + 4)
+            _dot_fma4_reg(L, XREG + 4 * (2 * l + 1))
     dot_tail(L)
     return "\n".join(L) + "\n"
 
@@ -463,6 +482,7 @@ def gen_iq3s_dot_asm() -> str:
         em("v_mul_f32_e32 v45, v8, v17")
         for half in range(2):
             em(f"global_load_ubyte v13, v[4:5], off offset:{66 + 2 * pair + half}")
+            _xpreload(L, em, 2 * pair + half)
             for l in range(4):
                 q0, q1 = 20 + 2 * l, 21 + 2 * l
                 em(f"global_load_ubyte v{q0}, v[4:5], off offset:"
@@ -490,7 +510,7 @@ def gen_iq3s_dot_asm() -> str:
                         _iq23_value(L, "v33", j + (0 if gi == 0 else 4), scale,
                                     f"v{40 + j}")
                     elem = elem_base + 4 * gi
-                    _dot_fma4(L, elem)
+                    _dot_fma4_reg(L, XREG + 4 * (2 * l + gi))
     dot_tail(L)
     return "\n".join(L) + "\n"
 
@@ -519,6 +539,9 @@ def gen_q2_0_dot_asm() -> str:
     em("global_load_ushort v8, v[4:5], off")
     for b in range(16):
         em(f"global_load_ubyte v{48 + b}, v[4:5], off offset:{2 + b}")
+    for b in range(16):                    # 16 个 dwordx4 一次发出去
+        em(f"global_load_dwordx4 v[{XREG + 4 * b}:{XREG + 4 * b + 3}], v[6:7], "
+           f"off offset:{16 * b}")
     em("s_waitcnt vmcnt(0)")
     em("v_cvt_f32_f16_e32 v8, v8")
     for b in range(16):
@@ -531,11 +554,9 @@ def gen_q2_0_dot_asm() -> str:
             em(f"v_cvt_f32_u32_e32 v{24 + k}, v{24 + k}")
             em(f"v_add_f32_e32 v{24 + k}, -1.0, v{24 + k}")
             em(f"v_mul_f32_e32 v{24 + k}, v8, v{24 + k}")
-        off = 16 * b
-        em(f"global_load_dwordx4 v[64:67], v[6:7], off offset:{off}")
-        em("s_waitcnt vmcnt(0)")
         for j in range(4):
-            em(f"v_fma_f32 v{DOT_ACC[j]}, v{24 + j}, v{64 + j}, v{DOT_ACC[j]}")
+            em(f"v_fma_f32 v{DOT_ACC[j]}, v{24 + j}, "
+               f"v{XREG + 4 * b + j}, v{DOT_ACC[j]}")
     dot_tail(L)
     return "\n".join(L) + "\n"
 
@@ -562,18 +583,16 @@ def gen_iq4xs_dot_asm() -> str:
         em("v_perm_b32 v27, v3, v13, v28")
         em("v_bfi_b32 v30, v27, v26, v25")
 
-    def fma4(off: int) -> None:
+    def fma4(xreg: int) -> None:
         for i in range(4):
             em(f"v_lshrrev_b32_e32 v{40 + i}, {8 * i}, v30")
             em(f"v_lshlrev_b32_e32 v{40 + i}, 24, v{40 + i}")
             em(f"v_ashrrev_i32_e32 v{40 + i}, 24, v{40 + i}")
             em(f"v_cvt_f32_i32_e32 v{40 + i}, v{40 + i}")
             em(f"v_mul_f32_e32 v{40 + i}, v46, v{40 + i}")
-        # 注意：v48..v79 被 qs 的 dwordx2 占着，x 临时寄存器要用更高的。
-        em(f"global_load_dwordx4 v[100:103], v[6:7], off offset:{off}")
-        em("s_waitcnt vmcnt(0)")
         for i in range(4):
-            em(f"v_fma_f32 v{IQ4XS_ACC[i]}, v{40 + i}, v{100 + i}, v{IQ4XS_ACC[i]}")
+            em(f"v_fma_f32 v{IQ4XS_ACC[i]}, v{40 + i}, v{xreg + i}, "
+               f"v{IQ4XS_ACC[i]}")
 
     em(".text")
     em(f"k_{IQ4XS_NAME}:")
@@ -604,6 +623,12 @@ def gen_iq4xs_dot_asm() -> str:
     em("v_lshlrev_b32_e32 v17, 8, v17")
     em("v_or_b32_e32 v15, v16, v17")
     for ib in range(8):
+        # 一个 32 元素子块的激活（128 B = 8 条 dwordx4）先全部发出去，只等一次；
+        # 原来是每条 dwordx4 后面跟一条 s_waitcnt vmcnt(0)（整块 64 次全排空）。
+        for m in range(8):
+            em(f"global_load_dwordx4 v[{XREG + 4 * m}:{XREG + 4 * m + 3}], "
+               f"v[6:7], off offset:{128 * ib + 16 * m}")
+        em("s_waitcnt vmcnt(0)")
         em(f"v_lshrrev_b32_e32 v44, {4 * ib}, v14")
         em("v_and_b32_e32 v44, 0xf, v44")
         em(f"v_lshrrev_b32_e32 v45, {2 * ib}, v15")
@@ -617,12 +642,12 @@ def gen_iq4xs_dot_asm() -> str:
             qreg = 48 + 4 * ib + j
             em(f"v_and_b32_e32 v20, 0x0f0f0f0f, v{qreg}")
             decode("v20")
-            fma4(128 * ib + 16 * j)
+            fma4(XREG + 4 * j)
             em(f"v_and_b32_e32 v20, 0xf0f0f0f0, v{qreg}")
             em("v_lshrrev_b32_e32 v20, 4, v20")
             em("v_and_b32_e32 v20, 0x0f0f0f0f, v20")
             decode("v20")
-            fma4(128 * ib + 64 + 16 * j)
+            fma4(XREG + 16 + 4 * j)
     dot_tail(L, IQ4XS_ACC)
     return "\n".join(L) + "\n"
 
@@ -1011,6 +1036,7 @@ def gen_iq3xxs_dot_asm() -> str:
             em(f"global_load_ubyte v{15 + q}, v[4:5], off offset:{66 + 4 * ib + q}")
         for q in range(8):
             em(f"global_load_ubyte v{20 + q}, v[4:5], off offset:{2 + 8 * ib + q}")
+        _xpreload(L, em, ib)
         em("s_waitcnt vmcnt(0)")
         em("v_lshlrev_b32_e32 v16, 8, v16")
         em("v_or_b32_e32 v15, v15, v16")
@@ -1048,10 +1074,7 @@ def gen_iq3xxs_dot_asm() -> str:
                 for j in range(4):
                     value(greg, base + j)
                 elem = ib * 32 + 8 * l + 4 * gi
-                em(f"global_load_dwordx4 v[64:67], v[6:7], off offset:{4 * elem}")
-                em("s_waitcnt vmcnt(0)")
-                for j in range(4):
-                    em(f"v_fma_f32 v{DOT_ACC[j]}, v{40 + j}, v{64 + j}, v{DOT_ACC[j]}")
+                _dot_fma4_reg(L, XREG + 4 * (2 * l + gi))
     dot_tail(L)
     return "\n".join(L) + "\n"
 
