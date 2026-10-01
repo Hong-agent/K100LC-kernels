@@ -163,7 +163,8 @@ def main() -> int:
     ap.add_argument("--workgroup", type=int, default=64)
     args = ap.parse_args()
 
-    idx = json.loads((ROOT / "build/flashnext-iq3s-shard1.index.json").read_text(encoding="utf-8"))
+    from gguf_sample import load_index
+    idx = load_index()
     t = next((x for x in idx["tensors"] if x["name"] == args.tensor), None)
     if t is None or t["type"] != "IQ4_NL":
         raise SystemExit(f"{args.tensor}: 不是 IQ4_NL 张量")

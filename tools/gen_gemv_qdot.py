@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """量化权重「原生解码 + 点积」融合 GEMV（gfx926 `.s` 生成器）+ 自检。
 
-    python3 tools/gen_gemv_qdot.py            # IQ4_NL 自检（真权重 + numpy 对账）
+    python3 tools/gen_gemv_qdot.py            # 11 类编码自检（真权重 + numpy 对账）
 
 ## 为什么要融合
 
@@ -691,6 +691,244 @@ def gen_q6k_dot_asm() -> str:
 
 
 # --------------------------------------------------------------------------
+# Q4_K / Q5_K / Q8_0 / Q4_0 融合点积
+# --------------------------------------------------------------------------
+Q4K_NAME = "q4k_dot_k"
+Q4K_ARGS = dot_args(0)
+Q4K_KERNARG = dot_kernarg(0)
+
+Q5K_NAME = "q5k_dot_k"
+Q5K_ARGS = dot_args(0)
+Q5K_KERNARG = dot_kernarg(0)
+
+Q80_NAME = "q8_0_dot_k"
+Q80_ARGS = dot_args(0)
+Q80_KERNARG = dot_kernarg(0)
+
+Q40_NAME = "q4_0_dot_k"
+Q40_ARGS = dot_args(0)
+Q40_KERNARG = dot_kernarg(0)
+
+
+def _emit_waddr(L: list[str], block_bytes: int) -> None:
+    """v4:v5 = w + ids[ew]*stride + 专家内块号*块字节数。"""
+    em = L.append
+    em(f"v_mov_b32_e32 v48, {block_bytes}")
+    em("v_mul_lo_u32 v2, v124, v48")
+    em("v_add_u32_e32 v2, v2, v120")
+    em("v_mov_b32_e32 v4, s16")
+    em("v_mov_b32_e32 v5, s17")
+    em("v_add_co_u32_e32 v4, vcc, v4, v2")
+    em("v_addc_co_u32_e32 v5, vcc, v5, v3, vcc")
+
+
+def _emit_nibble(L: list[str], dst: str, src: str, shift: int) -> None:
+    """dst = (src >> shift) & 0xF；shift=0 时不发多余指令。"""
+    if shift:
+        L.append(f"v_lshrrev_b32_e32 {dst}, {shift}, {src}")
+        L.append(f"v_and_b32_e32 {dst}, 0xf, {dst}")
+    else:
+        L.append(f"v_and_b32_e32 {dst}, 0xf, {src}")
+
+
+def _emit_k_scale(L: list[str], j: int, a_reg: str, nb_reg: str) -> None:
+    """Q4_K/Q5_K 第 j 组（j=0..7）的 `a=d*sc`、`nb=-(dmin*m)`。
+
+    尺度字节 s0..s11 已装在 v16..v18；d、dmin 在 v9、v10。
+    `_scale_min_k4` 的分段规则与 `iq_dequant.dequant_q4_k` 一致：
+        j<4:  sc=s[j]&63,               m=s[j+4]&63
+        j>=4: sc=(s[j+4]&15)|((s[j-4]>>6)<<4)
+              m =(s[j+4]>>4)|((s[j]>>6)<<4)
+    """
+    em = L.append
+
+    def ld_byte(dst: str, idx: int) -> None:
+        dw, sh = idx // 4, 8 * (idx % 4)
+        if sh:
+            em(f"v_lshrrev_b32_e32 {dst}, {sh}, v{16 + dw}")
+        else:
+            em(f"v_mov_b32_e32 {dst}, v{16 + dw}")
+        em(f"v_and_b32_e32 {dst}, 0xff, {dst}")
+
+    if j < 4:
+        ld_byte("v60", j)
+        em("v_and_b32_e32 v60, 63, v60")
+        ld_byte("v61", j + 4)
+        em("v_and_b32_e32 v61, 63, v61")
+    else:
+        ld_byte("v62", j + 4)
+        em("v_and_b32_e32 v60, 15, v62")
+        ld_byte("v63", j - 4)
+        em("v_lshrrev_b32_e32 v63, 6, v63")
+        em("v_lshlrev_b32_e32 v63, 4, v63")
+        em("v_or_b32_e32 v60, v60, v63")
+        em("v_lshrrev_b32_e32 v61, 4, v62")
+        ld_byte("v63", j)
+        em("v_lshrrev_b32_e32 v63, 6, v63")
+        em("v_lshlrev_b32_e32 v63, 4, v63")
+        em("v_or_b32_e32 v61, v61, v63")
+    em("v_cvt_f32_u32_e32 v60, v60")
+    em(f"v_mul_f32_e32 {a_reg}, v9, v60")          # a = d * sc
+    em("v_cvt_f32_u32_e32 v61, v61")
+    em(f"v_mul_f32_e32 {nb_reg}, v10, v61")        # dmin * m
+    em(f"v_mul_f32_e32 {nb_reg}, -1.0, {nb_reg}")  # nb = -(dmin * m)
+
+
+def gen_q4_0_dot_asm() -> str:
+    """Q4_0：32 权重 / 18 字节块（f16 d + 16B qs），值 = d*(q-8)。"""
+    L: list[str] = []
+    em = L.append
+    em(".text")
+    em(f"k_{Q40_NAME}:")
+    dot_head(L, 0)
+    dot_xaddr(L, 7)                                # BLK=32 → *128 B
+    _emit_waddr(L, 18)
+    em("global_load_ushort v8, v[4:5], off")
+    for b in range(16):
+        em(f"global_load_ubyte v{20 + b}, v[4:5], off offset:{2 + b}")
+    em("s_waitcnt vmcnt(0)")
+    em("v_cvt_f32_f16_e32 v8, v8")
+    em("v_mov_b32_e32 v36, 8")
+    for q in range(4):
+        # 低半字节 → 元素 4q..4q+3
+        em(f"global_load_dwordx4 v[40:43], v[6:7], off offset:{16 * q}")
+        em("s_waitcnt vmcnt(0)")
+        for k in range(4):
+            _emit_nibble(L, "v38", f"v{20 + 4 * q + k}", 0)
+            em("v_sub_u32_e32 v38, v38, v36")
+            em("v_cvt_f32_i32_e32 v38, v38")
+            em("v_mul_f32_e32 v38, v38, v8")
+            em(f"v_fma_f32 v{DOT_ACC[k]}, v38, v{40 + k}, v{DOT_ACC[k]}")
+        # 高半字节 → 元素 16+4q..16+4q+3
+        em(f"global_load_dwordx4 v[40:43], v[6:7], off offset:{4 * (16 + 4 * q)}")
+        em("s_waitcnt vmcnt(0)")
+        for k in range(4):
+            _emit_nibble(L, "v38", f"v{20 + 4 * q + k}", 4)
+            em("v_sub_u32_e32 v38, v38, v36")
+            em("v_cvt_f32_i32_e32 v38, v38")
+            em("v_mul_f32_e32 v38, v38, v8")
+            em(f"v_fma_f32 v{DOT_ACC[k]}, v38, v{40 + k}, v{DOT_ACC[k]}")
+    dot_tail(L)
+    return "\n".join(L) + "\n"
+
+
+def gen_q8_0_dot_asm() -> str:
+    """Q8_0：32 权重 / 34 字节块（f16 d + 32×int8），值 = d*q。"""
+    L: list[str] = []
+    em = L.append
+    em(".text")
+    em(f"k_{Q80_NAME}:")
+    dot_head(L, 0)
+    dot_xaddr(L, 7)                                # BLK=32 → *128 B
+    _emit_waddr(L, 34)
+    em("global_load_ushort v8, v[4:5], off")
+    em("s_waitcnt vmcnt(0)")
+    em("v_cvt_f32_f16_e32 v8, v8")
+    for q in range(8):
+        for k in range(4):
+            em(f"global_load_ubyte v{20 + k}, v[4:5], off offset:{2 + 4 * q + k}")
+        em(f"global_load_dwordx4 v[40:43], v[6:7], off offset:{16 * q}")
+        em("s_waitcnt vmcnt(0)")
+        for k in range(4):
+            em(f"v_lshlrev_b32_e32 v30, 24, v{20 + k}")
+            em("v_ashrrev_i32_e32 v30, 24, v30")
+            em("v_cvt_f32_i32_e32 v30, v30")
+            em("v_mul_f32_e32 v30, v30, v8")
+            em(f"v_fma_f32 v{DOT_ACC[k]}, v30, v{40 + k}, v{DOT_ACC[k]}")
+    dot_tail(L)
+    return "\n".join(L) + "\n"
+
+
+def gen_q4k_dot_asm() -> str:
+    """Q4_K：256 权重 / 144 字节块，8 组 32 元素各带 (d*sc, dmin*m)。"""
+    L: list[str] = []
+    em = L.append
+    em(".text")
+    em(f"k_{Q4K_NAME}:")
+    dot_head(L, 0)
+    dot_xaddr(L, 10)                               # BLK=256 → *1024 B
+    _emit_waddr(L, 144)
+    em("global_load_dword v8, v[4:5], off")        # d | dmin
+    em("global_load_dword v16, v[4:5], off offset:4")    # s0..s3
+    em("global_load_dword v17, v[4:5], off offset:8")    # s4..s7
+    em("global_load_dword v18, v[4:5], off offset:12")   # s8..s11
+    em("s_waitcnt vmcnt(0)")
+    em("v_cvt_f32_f16_e32 v9, v8")
+    em("v_lshrrev_b32_e32 v10, 16, v8")
+    em("v_cvt_f32_f16_e32 v10, v10")               # dmin
+    for s in range(4):
+        em(f"global_load_dwordx4 v[20:23], v[4:5], off offset:{16 + 32 * s}")
+        em(f"global_load_dwordx4 v[24:27], v[4:5], off offset:{32 + 32 * s}")
+        em("s_waitcnt vmcnt(0)")
+        _emit_k_scale(L, 2 * s, "v92", "v93")
+        _emit_k_scale(L, 2 * s + 1, "v94", "v95")
+        for half, a_reg, nb_reg in ((0, "v92", "v93"), (1, "v94", "v95")):
+            xbase = 256 * s + 128 * half
+            for l0 in range(0, 32, 4):
+                em(f"global_load_dwordx4 v[40:43], v[6:7], off "
+                   f"offset:{xbase + 4 * l0}")
+                em("s_waitcnt vmcnt(0)")
+                qreg = f"v{20 + l0 // 4}"
+                for k in range(4):
+                    _emit_nibble(L, "v30", qreg, 8 * k + 4 * half)
+                    em("v_cvt_f32_u32_e32 v30, v30")
+                    em(f"v_fma_f32 v30, v30, {a_reg}, {nb_reg}")
+                    em(f"v_fma_f32 v{DOT_ACC[k]}, v30, v{40 + k}, v{DOT_ACC[k]}")
+    dot_tail(L)
+    return "\n".join(L) + "\n"
+
+
+def gen_q5k_dot_asm() -> str:
+    """Q5_K：256 权重 / 176 字节块；第 5 位来自 qh[32] 的 bit(2s)/bit(2s+1)。"""
+    L: list[str] = []
+    em = L.append
+    em(".text")
+    em(f"k_{Q5K_NAME}:")
+    dot_head(L, 0)
+    dot_xaddr(L, 10)                               # BLK=256 → *1024 B
+    _emit_waddr(L, 176)
+    em("global_load_dword v8, v[4:5], off")        # d | dmin
+    em("global_load_dword v16, v[4:5], off offset:4")    # s0..s3
+    em("global_load_dword v17, v[4:5], off offset:8")    # s4..s7
+    em("global_load_dword v18, v[4:5], off offset:12")   # s8..s11
+    em("global_load_dwordx4 v[80:83], v[4:5], off offset:16")   # qh[0:16]
+    em("global_load_dwordx4 v[84:87], v[4:5], off offset:32")   # qh[16:32]
+    em("s_waitcnt vmcnt(0)")
+    em("v_cvt_f32_f16_e32 v9, v8")
+    em("v_lshrrev_b32_e32 v10, 16, v8")
+    em("v_cvt_f32_f16_e32 v10, v10")               # dmin
+    for s in range(4):
+        em(f"global_load_dwordx4 v[20:23], v[4:5], off offset:{48 + 32 * s}")
+        em(f"global_load_dwordx4 v[24:27], v[4:5], off offset:{64 + 32 * s}")
+        em("s_waitcnt vmcnt(0)")
+        _emit_k_scale(L, 2 * s, "v92", "v93")
+        _emit_k_scale(L, 2 * s + 1, "v94", "v95")
+        for half, a_reg, nb_reg in ((0, "v92", "v93"), (1, "v94", "v95")):
+            xbase = 256 * s + 128 * half
+            for l0 in range(0, 32, 4):
+                em(f"global_load_dwordx4 v[40:43], v[6:7], off "
+                   f"offset:{xbase + 4 * l0}")
+                em("s_waitcnt vmcnt(0)")
+                qreg = f"v{20 + l0 // 4}"
+                qhreg = f"v{80 + l0 // 4}"
+                for k in range(4):
+                    _emit_nibble(L, "v30", qreg, 8 * k + 4 * half)
+                    sh = 8 * k + 2 * s + half
+                    if sh:
+                        em(f"v_lshrrev_b32_e32 v31, {sh}, {qhreg}")
+                    else:
+                        em(f"v_mov_b32_e32 v31, {qhreg}")
+                    em("v_and_b32_e32 v31, 1, v31")
+                    em("v_lshlrev_b32_e32 v31, 4, v31")
+                    em("v_or_b32_e32 v30, v30, v31")
+                    em("v_cvt_f32_u32_e32 v30, v30")
+                    em(f"v_fma_f32 v30, v30, {a_reg}, {nb_reg}")
+                    em(f"v_fma_f32 v{DOT_ACC[k]}, v30, v{40 + k}, v{DOT_ACC[k]}")
+    dot_tail(L)
+    return "\n".join(L) + "\n"
+
+
+# --------------------------------------------------------------------------
 # 参考实现（numpy）：核对 GPU 结果
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
@@ -813,14 +1051,8 @@ def ref_dot(w_raw: np.ndarray, nbpr: int, rows_per_exp: int,
 
 def _load_iq4nl_blocks(blocks: int,
                        prefer: str = "blk.0.ffn_down_shexp.weight") -> bytes:
-    import json
-    cands = [ROOT / "build/flashnext-iq3s-shard1.index.json",
-             pathlib.Path("/home/t/桌面/k100lc-flashmoe/build/"
-                          "flashnext-iq3s-shard1.index.json")]
-    idx_path = next((p for p in cands if p.is_file()), None)
-    if idx_path is None:
-        raise SystemExit("找不到 flashnext-iq3s-shard1.index.json")
-    idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    from gguf_sample import load_index
+    idx = load_index()
     tensors = [t for t in idx["tensors"]
                if t["type"] == "IQ4_NL" and t["bytes"] >= blocks * 18]
     if not tensors:
@@ -894,19 +1126,36 @@ def selftest_iq4nl(nbpr: int = 20, rows_per_exp: int = 40) -> int:
     return 0 if ok else 1
 
 
+def _synth_blocks(qtype: str, block_bytes: int, blocks: int) -> bytes:
+    """索引里没有该编码时（例如 Q4_0）的合成权重块。
+
+    随机字节的 f16 尺度可能是 NaN/Inf，所以把 d / dmin 写成正常值。
+    """
+    rng = np.random.default_rng(17)
+    raw = bytearray(rng.integers(0, 256, size=blocks * block_bytes,
+                                 dtype=np.uint8).tobytes())
+    if qtype in ("Q4_0", "Q8_0"):
+        for i in range(blocks):
+            off = i * block_bytes
+            raw[off:off + 2] = np.float16(0.01).tobytes()
+    elif qtype in ("Q4_K", "Q5_K"):
+        for i in range(blocks):
+            off = i * block_bytes
+            raw[off:off + 2] = np.float16(0.01).tobytes()
+            raw[off + 2:off + 4] = np.float16(0.005).tobytes()
+    return bytes(raw)
+
+
 def _load_blocks(qtype: str, block_bytes: int, blocks: int,
-                 prefer: str | None = None) -> tuple[bytes, int]:
-    import json
-    cands = [ROOT / "build/flashnext-iq3s-shard1.index.json",
-             pathlib.Path("/home/t/桌面/k100lc-flashmoe/build/"
-                          "flashnext-iq3s-shard1.index.json")]
-    idx_path = next((p for p in cands if p.is_file()), None)
-    if idx_path is None:
-        raise SystemExit("找不到 flashnext-iq3s-shard1.index.json")
-    idx = json.loads(idx_path.read_text(encoding="utf-8"))
+                 prefer: str | None = None,
+                 allow_synth: bool = False) -> tuple[bytes, int]:
+    from gguf_sample import load_index
+    idx = load_index()
     tensors = [t for t in idx["tensors"]
                if t["type"] == qtype and t["bytes"] >= blocks * block_bytes]
     if not tensors:
+        if allow_synth:
+            return _synth_blocks(qtype, block_bytes, blocks), 0
         raise SystemExit(f"索引里找不到足够大的 {qtype} 张量")
     tensors.sort(key=lambda t: t["bytes"])
     t = next((x for x in tensors if x["name"] == prefer), tensors[0])
@@ -1059,11 +1308,12 @@ def selftest_iq3s() -> int:
 def _selftest_notable(qtype: str, kernel: str, gen, args, kernarg: int,
                       block_bytes: int, blk_elems: int, decode,
                       nbpr: int = 10, rows_per_exp: int = 24,
-                      prefer: str | None = None) -> int:
+                      prefer: str | None = None,
+                      allow_synth: bool = False) -> int:
     n_exp = 2
     total_rows = rows_per_exp * n_exp
     nblocks = total_rows * nbpr
-    raw, _ = _load_blocks(qtype, block_bytes, nblocks, prefer)
+    raw, _ = _load_blocks(qtype, block_bytes, nblocks, prefer, allow_synth)
     k = nbpr * blk_elems
     x = np.random.default_rng(13).standard_normal((n_exp, k)).astype(np.float32)
     wv = decode(raw).reshape(nblocks, blk_elems).astype(np.float32)
@@ -1126,6 +1376,34 @@ def selftest_q6k() -> int:
                              prefer="blk.3.attn_q.weight")
 
 
+def selftest_q4k() -> int:
+    from iq_dequant import dequant_q4_k_fast
+    return _selftest_notable("Q4_K", Q4K_NAME, gen_q4k_dot_asm, Q4K_ARGS,
+                             Q4K_KERNARG, 144, 256, dequant_q4_k_fast,
+                             prefer="blk.0.ffn_gate_shexp.weight")
+
+
+def selftest_q5k() -> int:
+    from iq_dequant import dequant_q5_k_fast
+    return _selftest_notable("Q5_K", Q5K_NAME, gen_q5k_dot_asm, Q5K_ARGS,
+                             Q5K_KERNARG, 176, 256, dequant_q5_k_fast,
+                             prefer="blk.4.ffn_up_shexp.weight")
+
+
+def selftest_q8_0() -> int:
+    from iq_dequant import dequant_q8_0_fast
+    return _selftest_notable("Q8_0", Q80_NAME, gen_q8_0_dot_asm, Q80_ARGS,
+                             Q80_KERNARG, 34, 32, dequant_q8_0_fast,
+                             prefer="blk.47.ffn_down_shexp.weight")
+
+
+def selftest_q4_0() -> int:
+    from iq_dequant import dequant_q4_0_fast
+    return _selftest_notable("Q4_0", Q40_NAME, gen_q4_0_dot_asm, Q40_ARGS,
+                             Q40_KERNARG, 18, 32, dequant_q4_0_fast,
+                             allow_synth=True)
+
+
 def main() -> int:
     rc = selftest_iq4nl()
     rc |= selftest_iq3xxs()
@@ -1134,10 +1412,14 @@ def main() -> int:
     rc |= selftest_q2_0()
     rc |= selftest_iq4xs()
     rc |= selftest_q6k()
+    rc |= selftest_q4k()
+    rc |= selftest_q5k()
+    rc |= selftest_q8_0()
+    rc |= selftest_q4_0()
     return rc
 
 
-# 供 build_flashmoe.py 收集（name, gen_asm, args, kernarg_size）
+# 供 build_native_kernels.py 收集（name, gen_asm, args, kernarg_size）
 KERNELS = [
     (IQ4NL_NAME, gen_iq4nl_dot_asm, IQ4NL_ARGS, IQ4NL_KERNARG),
     (IQ3XXS_NAME, gen_iq3xxs_dot_asm, IQ3XXS_ARGS, IQ3XXS_KERNARG),
@@ -1146,6 +1428,10 @@ KERNELS = [
     (Q20_NAME, gen_q2_0_dot_asm, Q20_ARGS, Q20_KERNARG),
     (IQ4XS_NAME, gen_iq4xs_dot_asm, IQ4XS_ARGS, IQ4XS_KERNARG),
     (Q6K_NAME, gen_q6k_dot_asm, Q6K_ARGS, Q6K_KERNARG),
+    (Q4K_NAME, gen_q4k_dot_asm, Q4K_ARGS, Q4K_KERNARG),
+    (Q5K_NAME, gen_q5k_dot_asm, Q5K_ARGS, Q5K_KERNARG),
+    (Q80_NAME, gen_q8_0_dot_asm, Q80_ARGS, Q80_KERNARG),
+    (Q40_NAME, gen_q4_0_dot_asm, Q40_ARGS, Q40_KERNARG),
     (REDUCE_NAME, gen_reduce_asm, REDUCE_ARGS, REDUCE_KERNARG),
 ]
 

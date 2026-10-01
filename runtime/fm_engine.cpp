@@ -1,4 +1,4 @@
-// fm_engine.cpp —— k100lc-flashmoe 的常驻引擎（C ABI，Python 用 ctypes 驱动）。
+// fm_engine.cpp —— K100LC-kernels 常驻 HSA 引擎（C ABI，Python 用 ctypes 驱动）。
 //
 // 与 `hsa_seq.py`（每次编译一个临时 C 程序）不同，这里是**一个长驻进程**：
 // 显存缓冲只分配一次，51 GiB 专家权重可以常驻，逐 token 反复 launch。

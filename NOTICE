@@ -1,7 +1,7 @@
-k100lc-flashmoe
+K100LC-kernels
 Copyright 2026
 
-本项目的自有代码以 Apache-2.0 发布（见 LICENSE）。以下是第三方内容与出处。
+本包自有代码以 Apache-2.0 发布（见 LICENSE）。以下是第三方内容与出处。
 
 1) i-quant 码本 / 掩码 / 网格表，以及各量化块的字节布局与反量化过程
    ------------------------------------------------------------------
@@ -10,28 +10,11 @@ Copyright 2026
          ggml/src/ggml-common.h（表与块结构）、ggml/src/ggml-quants.c（反量化参考）
    许可：MIT
 
-   本项目**不在仓库里携带** ggml 源码；只由 tools/extract_iq_tables.py 从
-   ggml-common.h 生成 tools/iq_tables.py（几张数值表），
-   tools/iq_dequant.py 里的反量化流程是按其参考实现重新实现的（PyNumPy 版本），
+   本包**不在仓库里携带** ggml 源码；只保留整理后的数值表 tools/iq_tables.py，
+   tools/iq_dequant.py 里的反量化流程是按其参考实现重新实现的（纯 NumPy 版本），
    用于给 gfx926 内核做逐元素对账。
 
-2) 参考实现（引擎设计、GGUF 读取、MoE 分层跑法）
+2) 模型权重
    ------------------------------------------------------------------
-   来源：Niko1221/Strata  https://github.com/Niko1221/Strata
-   许可：MIT
-
-   本项目参考了它的模型解剖结论（专家分层、PLE n-gram 查表、
-   MTP 投机、KV int8/流式）与 GGUF 头部读取方式；
-   gfx926 上的内核、运行时与显存布局为本项目自研。
-
-3) 无 DTK 运行路径与自研汇编器
-   ------------------------------------------------------------------
-   来源：本项目前身 K100LC-FASTASM-NVFP4（Apache-2.0 / MIT 合并）
-   asm.py、encodings.json、runtime/hsa_rt.{h,cpp}、tools/make_hsaco_*.py 等
-   直接沿用。
-
-4) 模型权重
-   ------------------------------------------------------------------
-   Qwen/Qwen3.8-Flash-Next（Qwen 团队）与其 GSQ-RCO 量化
-   ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF。各自许可见其发布页；
-   权重不随本仓库发布。
+   本仓库不包含任何模型权重。示例里出现的 checkpoint 名称只用于说明
+   输入格式，权重许可见各自发布页。

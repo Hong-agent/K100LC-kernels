@@ -3,7 +3,7 @@
 """常驻引擎的 Python 封装（ctypes → build/libfm_engine.so）。
 
     from fm_engine import Engine
-    e = Engine("build/flashmoe.hsaco")
+    e = Engine("prebuilt/k100lc_kernels.hsaco")
     p = e.alloc(1024)
     e.upload(p, x)                 # x: numpy 数组或 bytes
     e.launch("gemv_i8_k", grid, wg, [p, ...])

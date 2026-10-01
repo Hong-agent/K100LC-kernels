@@ -1,3 +1,9 @@
 build/
 __pycache__/
 *.pyc
+models/
+*.gguf
+*.rt4
+*.safetensors
+*.bin
+!prebuilt/*.bin

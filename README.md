@@ -1,124 +1,177 @@
 # K100LC-kernels
 
-海光 **K100_LC (gfx926, wave64)** 的可复用 GPU 内核包：自研汇编内核 +
-FASTASM 基线内核 + 无 DTK 的常驻 HSA 运行时。后续项目直接引用本目录即可，
-不需要再复制 `asm.py`、HSACO 管线或 HSA 垫片。
+海光 **K100_LC（gfx926，wave64）** 的可复用 GPU 内核包：自研表驱动汇编器、
+**119 个预编译内核**、无 DTK 的常驻 HSA 运行时、Python / C ABI 封装，以及一个
+受限 Python DSL → gfx926 汇编 → HSACO 的编译器。只依赖 `/opt/hyhal` 的 HSA
+运行时，**不依赖 DTK / hipcc / Docker**。
 
-当前包含 **109 个内核**（81 个 FASTASM 基线 + 28 个自研），预编译产物在
-`prebuilt/`；内核目录在 `python/k100lc_kernels/catalog.json`。
+这个仓库是完整的单项目：克隆下来即可 `source env.sh` 后直接调用
+`prebuilt/k100lc_kernels.hsaco` 里的内核，不需要其它本地工程。
 
-## 目录
+| 文档 | 内容 |
+|---|---|
+| [`docs/KERNEL_CALLING.md`](docs/KERNEL_CALLING.md) | **内核调用方式（详细）**：Python / C ABI、参数打包、grid 语义、逐类调用配方、排错 |
+| [`docs/KERNELS.md`](docs/KERNELS.md) | 119 个内核的逐参数总表（从 catalog 自动生成） |
+| [`docs/ABI.md`](docs/ABI.md) | kernarg 布局、动态启动、2D grid 限制 |
+| [`docs/INT4.md`](docs/INT4.md) | compressed-tensors INT4（W4A16）格式与内核用法 |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | K100_LC 算力 / 带宽实测与复现方法 |
+
+## 仓库内容
 
 | 路径 | 内容 |
 |---|---|
-| `asm.py` / `encodings.json` | 自研表驱动 gfx926 汇编器 |
-| `kernels/asm/` | 81 个基线 `.s`（FASTASM） |
-| `tools/gen_*.py` | 10 个自研内核生成器（GEMV / dequant / IQ→i8） |
-| `runtime/hsa_rt.{h,cpp}` | 无 DTK HSA 运行时垫片 |
-| `runtime/fm_engine.{h,cpp}` | 常驻引擎 C ABI |
-| `python/k100lc_kernels/` | Python 封装 + 内核目录 |
-| `compiler/` | 受限 Python DSL → gfx926 汇编 → HSACO 的编译器 |
-| `prebuilt/` | `k100lc_base.hsaco`（81 基线）、`k100lc_kernels.hsaco`（109 全量）、`libfm_engine.so`、`nodtk_kernels.h` |
-| `docs/ABI.md` | 参数布局、grid 语义、加内核/更新流程 |
+| `prebuilt/k100lc_kernels.hsaco` | 完整内核包（119 个内核），可直接加载 |
+| `prebuilt/k100lc_base.hsaco` | 基线内核子集 |
+| `prebuilt/libfm_engine.so` | 常驻 HSA 引擎（C ABI） |
+| `prebuilt/nodtk_kernels.h` | 内核名 / 参数布局的 C 头（由 HSACO metadata 生成） |
+| `python/k100lc_kernels/` | Python 封装：`Runtime`、内核目录、RT4 / W4A8 / W4A4 接口 |
+| `runtime/` | `fm_engine.{h,cpp}` 引擎与 `hsa_rt.{h,cpp}` HSA 垫片 |
+| `kernels/asm/` | 自研 gfx926 汇编 `.s` 源文件 |
+| `kernels/*.h` | Attention / GEMM / GEMV 的块参数头 |
+| `tools/` | 汇编、生成器、构建、catalog、自检与文档生成脚本 |
+| `compiler/` | 受限 Python DSL 编译器（可直接产出可动态启动的 HSACO） |
+| `examples/` | Python / C++ 调用示例 |
+
+## 环境要求
+
+* 海光 K100_LC（gfx926）DCU，主机可访问 `/dev/kfd`。
+* `/opt/hyhal`（HSA runtime 1.11 一代）与 `libhsa-runtime64`。
+* Python 3.10+、NumPy；运行时不需要 torch。
+* 重新构建需要 `g++`（C++17）与 `c++filt`。
+
+```bash
+source env.sh                 # 设置 PYTHONPATH 与 LD_LIBRARY_PATH
+python3 -m k100lc_kernels list
+```
 
 ## 快速调用（Python）
 
-```bash
-source env.sh
-python3 -m k100lc_kernels list gemv
-python3 examples/python_gemv.py
-```
-
 ```python
-from k100lc_kernels import Runtime, kernels, info
+import numpy as np
+from k100lc_kernels import Runtime, info
 
-rt = Runtime()                    # 默认加载 prebuilt/k100lc_kernels.hsaco
-p = rt.alloc(1024)
-rt.upload(p, bytes(1024))
-rt.launch("fill_k", 1, 64, [p, 1.0, 256])   # grid=workgroup 个数！
+rt = Runtime()                                  # 默认加载 prebuilt/k100lc_kernels.hsaco
+n, k = 256, 640
+w = np.random.default_rng(0).standard_normal((n, k), dtype=np.float32)
+x = np.random.default_rng(1).standard_normal(k, dtype=np.float32)
+
+pw, px, py = rt.alloc(w.nbytes), rt.alloc(x.nbytes), rt.alloc(n * 4)
+rt.upload(pw, w)
+rt.upload(px, x)
+
+# 关键：grid 是 workgroup 个数，不是总 work-item 数
+rt.launch("gemv_f32_warp_k", n, 64, [pw, px, py, n, k, 64])
 rt.sync()
-print(info("gemv_f32_warp_k"))
+y = rt.download(py, n, np.float32)
+print(np.abs(y - w @ x).max())
+print(info("gemv_f32_warp_k")["args"])          # catalog 里的参数布局
 ```
 
-任意 HSACO（包括编译器新产出的内核）可以用动态 metadata 启动，不必重建
-`libfm_engine.so`：
+命令行示例：
 
-```python
-rt = Runtime(hsaco="build/my.hsaco", catalog="build/my.catalog.json")
-rt.launch_dyn("my_kernel", grid_x, 1, workgroup_x, 1, [arg0, arg1, ...])
+```bash
+python3 examples/python_gemv.py
+python3 examples/python_int4_gemv.py --model-dir /path/to/int4-checkpoint
+python3 examples/python_w4a4_w4a8_gemv.py --selftest
 ```
-
-`Runtime.launch_dyn` 的 catalog 也可以放在 HSACO 旁边
-（`<name>.catalog.json`，编译器会自动生成）。当前 HSA 路径**一个进程只加载
-一个 HSACO**；多个 HSACO 先用 `tools/merge_hsacos.py` 合并，或分进程使用。
 
 ## 快速调用（C++）
 
 ```cpp
 #include "fm_engine.h"
+
 fm_init("prebuilt/k100lc_kernels.hsaco");
 void* p = fm_alloc(1024);
 fm_free(p);
 ```
 
-编译：
-
 ```bash
 g++ -O2 -std=c++17 -I runtime examples/cpp_alloc.cpp \
     -L prebuilt -lfm_engine -L/opt/hyhal/lib -lhsa-runtime64 \
     -Wl,-rpath,$PWD/prebuilt -Wl,-rpath,/opt/hyhal/lib -o /tmp/cpp_alloc
-LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH /tmp/cpp_alloc prebuilt/k100lc_kernels.hsaco
+LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
+    /tmp/cpp_alloc prebuilt/k100lc_kernels.hsaco
 ```
 
-## 两种 grid 语义（重要）
+## 内核分类（119）
 
-| 入口 | `grid` 含义 |
-|---|---|
-| `Runtime.launch` / `fm_launch` / `Engine.launch` | **workgroup 个数**（块数） |
-| `tools/kernel_lab.run_one` / `hsa_job` | **总 work-item 数**，内部自己除 workgroup |
+| 分类 | 数量 | 说明 |
+|---|---:|---|
+| NVFP4 | 27 | `nvfp4_quant_act` / GEMV（M=1..4、1..4 列块） / GEMM |
+| INT4（W4A4 / W4A8） | 23 | 激活量化、GEMV M=1..4、两行 GEMV、预填充 GEMM |
+| 融合点积 `*_dot_k` | 12 | GGUF 11 类编码 + compressed-tensors INT4 的原生解码 + 点积 |
+| 量化解码 | 12 | Q4_0 / Q8_0 / K-quant / I-quant → f32 或 i8 |
+| GEMV / GEMM | 3 | f32、int8 通用 GEMV 与旧版 f32 GEMV |
+| Transformer 常用算子 | 19 | RMSNorm / LayerNorm / softmax / top-k / router / rope / 激活等 |
+| Attention / KV / 视觉塔 | 17 | FlashAttention、KV 写入、注意力量化、ViT 算子 |
+| 序列模型 / 卷积 | 6 | GDN 递推、深度卷积、SSM gate、QKV 切分 |
 
-内核里 `v0 = tid`、`s6 = blockIdx.x`（2D 时 `blockIdx.y` 来自 `launch2d`
-的 `gy`）。写内核测试时最容易在这里踩坑。
+完整清单与每个内核的显式参数见 [`docs/KERNELS.md`](docs/KERNELS.md)。
 
-## 重建
+## 量化权重通路
 
-```bash
-bash tools/build_all.sh
+**compressed-tensors INT4（W4A16）**：`int4_dot_k` 直接吃
+`weight_packed`（I32）+ `weight_scale`（BF16，每 128 个 k 一个），不转换、
+不重量化；`int4_dequant_k` 用于逐位对账与回退。格式、地址公式与实测见
+[`docs/INT4.md`](docs/INT4.md)。
+
+**RT4 INT4（W4A8 / W4A4）**：`.rt4` 权重文件 + `.rt4.json` manifest，
+`k100lc_kernels.RT4File` / `W4Runner` 封装解码 GEMV 与预填充 GEMM：
+
+```python
+from k100lc_kernels import Runtime, RT4File, W4Runner
+
+rt = Runtime()
+f = RT4File("/path/model.rt4")                    # 同级 .rt4.json 自动加载
+t = f.tensor("model.layers.0.mlp.gate_proj.weight")
+wq, ws = f.upload_weight(rt, t)
+y = W4Runner(rt).gemv("w4a8", wq, ws, x, t.shape[0], t.shape[1])
+
+wq, wsc = f.upload_weight_gemm(rt, t)             # GEMM 用的组优先 f32 尺度
+y = W4Runner(rt).gemm(wq, wsc, x, t.shape[0], t.shape[1])   # M 是 128 的倍数
 ```
 
-产物：`build/k100lc_kernels.hsaco`（109 内核）、`build/libfm_engine.so`、
-`python/k100lc_kernels/catalog.json`，并同步到 `prebuilt/`。
+**GGUF 原生编码**：`Q2_0 / IQ4_NL / IQ4_XS / Q4_K / Q5_K / Q6_K / Q8_0 /
+Q4_0 / IQ2_S / IQ3_S / IQ3_XXS` 都有 `*_dequant_k`（→ f32）与 `*_dot_k`
+（原生解码 + 点积 → `partial`）。`*_dot_k` 统一用
+`reduce_blocks_k` 做行内归约。
 
-## 内核编译器
+## 构建与重新生成
 
 ```bash
-python3 -m k100lc_compiler build compiler/examples/silu.kkl \
-    -o /tmp/kbuild --emit-asm
+bash tools/build_all.sh        # 重建 HSACO / libfm_engine.so / catalog.json，
+                               # 并同步到 prebuilt/
+python3 tools/gen_kernel_docs.py   # 由 catalog.json 重新生成 docs/KERNELS.md
 python3 compiler/tests/test_examples.py
 ```
 
-语言子集、ABI、已知 hazard 规则见 `compiler/README.md`。
+构建顺序：`build_kernels.py`（基线汇编）→ `build_native_kernels.py`（生成器
+内核）→ `merge_hsacos.py`（合并）→ `gen_kernel_table.py` / `make_catalog.py`
+（运行时表与 Python catalog）→ `g++` 编译常驻引擎。
 
-## 更新（从其他项目吸收新内核）
+## 两种 grid 语义（最容易踩坑）
 
-```bash
-bash tools/update_from.sh /home/t/桌面/k100lc-flashmoe
-```
+| 入口 | `grid` 含义 |
+|---|---|
+| `Runtime.launch` / `fm_launch` / `Engine.launch` | **workgroup 个数** |
+| `tools/kernel_lab.run_one` / `tools/hsa_job.py` | **总 work-item 数**（内部自己除 workgroup） |
 
-脚本会同步 `kernels/asm/`、`kernels/kernel_spec.json`、`tools/gen_*.py` 和
-关键运行时文件，然后重建。新增/修改内核后请更新 `CHANGELOG.md` 和
-`python/k100lc_kernels/catalog.json`（`build_all.sh` 会重生成 catalog）。
+内核侧拿到 `v0 = threadIdx.x`、`s6 = blockIdx.x`。更多细节和逐类配方见
+[`docs/KERNEL_CALLING.md`](docs/KERNEL_CALLING.md)。
 
 ## 已知限制
 
-- 基线 C 内核里 **private_segment > 0** 的（例如 `gdn_k2<32>`、`gdn_k`）
-  需要 HSA queue scratch backing；当前运行时没有接通 scratch，直接调用会
-  fault。调用前请用 `kernels()` 里的 `private_segment` 字段判断。
-- 当前引擎的 `grid` 是块数；不要照搬 CUDA 的“总 work-item”写法。
-- 只支持 `/opt/hyhal` 的 HSA 运行时；主机需能访问 `/dev/kfd` 与 DCU。
+* Catalog 里 `private_segment > 0` 的内核（`gdn_k`、`gdn_k2<32>`、`fa_int4`、
+  `vit_attn_kernel`）需要 HSA queue scratch backing；当前运行时未接通 scratch，
+  直接调用可能 fault。调用前用 `info(lookup)["private_segment"]` 判断。
+* 当前 HSA 路径一个进程只加载一个 HSACO；多个 HSACO 先用
+  `tools/merge_hsacos.py` 合并。
+* 真机实测：这套运行时投递 2D grid 时 y 维第二个 workgroup 的写入不可靠。
+  需要二维并行时优先使用 1D 扁平块号内核（例如 `gemm_w4a4_flat`）。
+* 只支持 `/opt/hyhal` 的 HSA 运行时。
 
 ## 许可
 
-本包代码 Apache-2.0（见 `LICENSE`）；i-quant 码本/掩码/块布局来自
-llama.cpp / ggml（MIT），FASTASM 基线内核来自本机 `K100LC-FASTASM-NVFP4`
-项目，第三方说明见 `NOTICE`。
+本包自有代码 Apache-2.0（见 [`LICENSE`](LICENSE)）；i-quant 码本、掩码、
+网格表与 GGUF 量化块布局来自 llama.cpp / ggml（MIT）。第三方说明见
+[`NOTICE`](NOTICE)。本仓库不包含任何模型权重。

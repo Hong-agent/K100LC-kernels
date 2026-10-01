@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# 重建 81 个基线内核 + 10 个自研内核 → 91 内核 HSACO + 常驻引擎 + Python 目录。
+# 重建基线内核 + 自研内核 → 完整 HSACO + 常驻引擎 + Python 内核目录。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 mkdir -p build prebuilt python/k100lc_kernels
 
+python3 tools/gen_gemm_flat.py
 python3 tools/build_kernels.py --out-dir build
 python3 tools/make_hsaco_multi.py build/all_kernels_spec.json build/k100lc_base.hsaco
-python3 tools/build_flashmoe.py
-python3 tools/merge_hsacos.py build/k100lc_base.hsaco build/flashmoe.hsaco \
+python3 tools/build_native_kernels.py
+python3 tools/merge_hsacos.py build/k100lc_base.hsaco build/native_kernels.hsaco \
     -o build/k100lc_kernels.hsaco
 python3 tools/gen_kernel_table.py build/k100lc_kernels.hsaco build/nodtk_kernels.h
 python3 tools/make_catalog.py build/k100lc_kernels.hsaco python/k100lc_kernels/catalog.json
+python3 tools/gen_kernel_docs.py
 
 g++ -O2 -std=c++17 -fPIC -shared \
     -I runtime -I build -I /opt/hyhal/include \

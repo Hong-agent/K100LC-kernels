@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把本项目新增的原生内核打成一个 `build/flashmoe.hsaco`。
+"""把本包的原生内核打成一个 `build/native_kernels.hsaco`。
 
-    python3 tools/build_flashmoe.py
+    python3 tools/build_native_kernels.py
 
-只包含「专家原生解码 + 通用 GEMV」这批新内核；FASTASM 的 81 个基线内核
-另有自己的 HSACO（之后按需合并）。
+只包含 Python 生成器产出的原生内核；FASTASM 基线内核另有自己的 HSACO，
+两者最后由 `tools/merge_hsacos.py` 合并成完整内核包。
 """
 from __future__ import annotations
 
@@ -39,6 +39,9 @@ import gen_iq4nl_dequant  # noqa: E402
 import gen_iq4nl_to_i8  # noqa: E402
 import gen_iq4xs_dequant  # noqa: E402
 import gen_q2_0_dequant  # noqa: E402
+import gen_int4_dot  # noqa: E402
+import gen_quant_fast  # noqa: E402
+import gen_gemv_w4a4_r2  # noqa: E402
 
 MODULES = [
     gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_i8, gen_iq4nl_dequant, gen_iq4nl_to_i8,
@@ -47,11 +50,14 @@ MODULES = [
     gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_layernorm, gen_topk,
     gen_router_top10,
     gen_gemv_qdot,
+    gen_int4_dot,
+    gen_quant_fast,
+    gen_gemv_w4a4_r2,
 ]
 
 
 def main() -> int:
-    out = ROOT / "build" / "flashmoe_kernels"
+    out = ROOT / "build" / "native_kernels"
     out.mkdir(parents=True, exist_ok=True)
     spec = []
     jobs = []
@@ -80,9 +86,9 @@ def main() -> int:
             "private_segment": 0,
         })
         print(f"  {name:22s} code={len(code):6d}B vgpr={max(vgpr, 1):3d} sgpr={max(ngpr, 4):2d}")
-    spec_path = out / "flashmoe.spec.json"
+    spec_path = out / "native_kernels.spec.json"
     spec_path.write_text(json.dumps(spec, indent=1), encoding="utf-8")
-    hsaco = ROOT / "build" / "flashmoe.hsaco"
+    hsaco = ROOT / "build" / "native_kernels.hsaco"
     subprocess.run([sys.executable, str(ROOT / "tools/make_hsaco_multi.py"),
                     str(spec_path), str(hsaco)], check=True, capture_output=True)
     print(f"-> {hsaco}（{hsaco.stat().st_size} 字节，{len(spec)} 个内核）")

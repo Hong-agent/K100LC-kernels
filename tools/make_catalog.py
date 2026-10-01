@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from amdgpu_meta import read_metadata  # noqa: E402
-from gen_nodtk import demangled_base, norm  # noqa: E402
+from hsaco_names import demangled_base, norm  # noqa: E402
 
 
 def main() -> int:

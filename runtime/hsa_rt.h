@@ -1,12 +1,12 @@
-// hsa_rt.h —— 「全自研」路线的运行时垫片。
+// hsa_rt.h —— 无 DTK 的 HSA 运行时垫片（HIP API 子集）。
 //
-// RT4 运行时（K100LC-RT4/src）只用到了很小一撮 HIP API：内存分配/拷贝、内核启动
+// 上层代码只用一小撮 HIP API：内存分配/拷贝、内核启动
 // （<<<>>>）、事件与同步。这里用 /opt/hyhal 的 HSA 直接实现这一小撮，内核全部来自
-// k100lc-asm 自研汇编器产出的 HSACO（build/k100lc_all.hsaco），**不链接任何 DTK
+// asm.py 自研汇编器产出的 HSACO（build/k100lc_kernels.hsaco），**不链接任何 DTK
 // 组件**（libgalaxyhip / libamd_comgr / hipcc 一概不需要）。
 //
-// 用法（见 tools/build_nodtk.sh）：把 src/*.hip 里的设备代码剥掉、把 <<<>>> 换成
-// hsart_launch(...)，再和本文件一起用 g++ 编译。
+// 用法：把 .hip 里的设备代码剥掉、把 <<<>>> 换成 hsart_launch(...)，
+// 再和本文件一起用 g++ 编译。
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -65,7 +65,7 @@ hipError_t hipEventElapsedTime(float* ms, hipEvent_t a, hipEvent_t b);
 hipError_t hipGetLastError();
 const char* hipGetErrorString(hipError_t e);
 
-// 内核表（由 tools/gen_nodtk.py 从自研 HSACO 的 metadata 生成）
+// 内核表（由 tools/gen_kernel_table.py 从自研 HSACO 的 metadata 生成）
 #include "nodtk_kernels.h"
 
 // 把一包 kernarg 投递给指定内核（实现在 hsa_rt.cpp）

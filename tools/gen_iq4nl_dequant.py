@@ -135,8 +135,8 @@ def gen_asm() -> str:
 
 
 def pick_iq4nl_blocks(nblocks: int) -> bytes:
-    idx_path = ROOT / "build/flashnext-iq3s-shard1.index.json"
-    idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    from gguf_sample import load_index
+    idx = load_index()
     tensors = [t for t in idx["tensors"] if t["type"] == "IQ4_NL" and t["bytes"] >= nblocks * 18]
     if not tensors:
         raise SystemExit("索引里找不到 IQ4_NL 张量")

@@ -1,5 +1,5 @@
-// hsa_rt.cpp —— 用 /opt/hyhal 的 HSA 实现 RT4 运行时需要的 HIP 子集。
-// 内核来自自研 HSACO：优先 $RT_HSACO，其次 build/k100lc_all.hsaco，
+// hsa_rt.cpp —— 用 /opt/hyhal 的 HSA 实现本包需要的 HIP 子集。
+// 内核来自自研 HSACO：优先 $RT_HSACO，其次 build/k100lc_kernels.hsaco，
 // 再退回可执行文件旁边的 prebuilt/（源码包里带了预编译版本，解压即可跑）。
 //
 // 语义取舍（都对「跑通」友好，性能上标明代价）：
@@ -8,7 +8,7 @@
 //     全设备同步再拷 —— 比 HIP 的流序保守，但绝对安全。
 //   * 事件：本实现里拷贝在调用线程上就是同步完成的，所以「记录」= 置一个序号，
 //     「等事件」= 自旋等序号到位（预取线程与主线程之间靠它排序）。
-//     hipEventElapsedTime 因此返回 0（RT_PROF 在这条路线上不可用，见 README）。
+//     hipEventElapsedTime 因此返回 0（本包不支持事件计时）。
 //   * 内核投递：单队列、in-order；kernarg 用 64 个槽轮转，复用前等该槽上一次完成。
 #include "hsa_rt.h"
 
@@ -25,7 +25,7 @@
 #include <vector>
 
 #ifndef RT_HSACO_DEFAULT
-#define RT_HSACO_DEFAULT "build/k100lc_all.hsaco"
+#define RT_HSACO_DEFAULT "build/k100lc_kernels.hsaco"
 #endif
 
 #define HSA_CHECK(expr) do { hsa_status_t st_ = (expr); if (st_ != HSA_STATUS_SUCCESS) { \
@@ -200,11 +200,12 @@ void load_hsaco(const char* path) {
             if (char* s = strrchr(exe_dir, '/')) *s = '\0'; else exe_dir[0] = '\0';
         }
         std::vector<std::string> alts = {
-            "build/k100lc_all.hsaco", "prebuilt/k100lc_all.hsaco", "./k100lc_all.hsaco"};
+            "build/k100lc_kernels.hsaco", "prebuilt/k100lc_kernels.hsaco",
+            "./k100lc_kernels.hsaco"};
         if (exe_dir[0]) {
-            alts.push_back(std::string(exe_dir) + "/k100lc_all.hsaco");
-            alts.push_back(std::string(exe_dir) + "/../build/k100lc_all.hsaco");
-            alts.push_back(std::string(exe_dir) + "/../prebuilt/k100lc_all.hsaco");
+            alts.push_back(std::string(exe_dir) + "/k100lc_kernels.hsaco");
+            alts.push_back(std::string(exe_dir) + "/../build/k100lc_kernels.hsaco");
+            alts.push_back(std::string(exe_dir) + "/../prebuilt/k100lc_kernels.hsaco");
         }
         for (const std::string& a : alts)
             if ((f = fopen(a.c_str(), "rb"))) { alt_path = a; path = alt_path.c_str(); break; }

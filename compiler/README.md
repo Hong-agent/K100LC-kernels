@@ -8,7 +8,6 @@
 ## 快速使用
 
 ```bash
-cd /home/t/桌面/K100LC-kernels
 source env.sh
 python3 -m k100lc_compiler list compiler/examples/vadd.kkl
 python3 -m k100lc_compiler build compiler/examples/silu.kkl \

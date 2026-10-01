@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """从 gfx926 code object（HSACO/ELF）里读 AMDGPU msgpack 元数据。
 
-build 期只需要这一个只读小工具：`tools/gen_nodtk.py` 用它从自研 HSACO 里
+build 期只需要这一个只读小工具：`tools/gen_kernel_table.py` 用它从自研 HSACO 里
 取出每个内核的参数表与 kernarg/段大小。纯 Python，不依赖 DTK。
 """
 

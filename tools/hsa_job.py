@@ -23,9 +23,10 @@ sys.path.insert(0, str(ROOT / "tools"))
 from amdgpu_meta import read_metadata  # noqa: E402
 
 
-# 内核参数表直接从本项目自己的 HSACO 元数据里读（自研汇编器产出的那一份），
+# 内核参数表直接从本包 HSACO 的元数据里读（自研汇编器产出的那一份），
 # 因此这个 runner 不需要任何 DTK 产物。
-ALL_HSACO = Path(os.environ.get("RT_HSACO", str(ROOT / "build/k100lc_all.hsaco")))
+ALL_HSACO = Path(os.environ.get(
+    "RT_HSACO", str(ROOT / "prebuilt" / "k100lc_kernels.hsaco")))
 _META_CACHE: dict | None = None
 _META_PATH: Path | None = None
 

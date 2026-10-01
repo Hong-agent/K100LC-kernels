@@ -3439,6 +3439,65 @@
    "private_segment": 0
   },
   {
+   "name": "_Z14gemm_w4a4_flatPKjS0_PKfS2_Pfiiiii",
+   "lookup": "gemm_w4a4_flat",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 32,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 52,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 56,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 64,
+   "group_segment": 27136,
+   "private_segment": 0
+  },
+  {
    "name": "_Z15nvfp4_gemv_wideILi1ELi1EEvPKjPKhPKaS5_PKfPfiif",
    "lookup": "nvfp4_gemv_wide<1,1>",
    "args": [
@@ -8162,6 +8221,207 @@
    "private_segment": 0
   },
   {
+   "name": "gemv_w4a4_r2_k",
+   "lookup": "gemv_w4a4_r2_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 32,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 48,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "gemv_w4a4_r2_m3_k",
+   "lookup": "gemv_w4a4_r2_m3_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 32,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 48,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "int4_dequant_k",
+   "lookup": "int4_dequant_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 32,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "int4_dot_k",
+   "lookup": "int4_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 56,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 64,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 68,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 72,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 80,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
    "name": "iq2s_dequant_k",
    "lookup": "iq2s_dequant_k",
    "args": [
@@ -8932,6 +9192,80 @@
    "private_segment": 0
   },
   {
+   "name": "q4_0_dot_k",
+   "lookup": "q4_0_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 56,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 60,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 64,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 72,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
    "name": "q4k_dequant",
    "lookup": "q4k_dequant",
    "args": [
@@ -9021,6 +9355,80 @@
    "private_segment": 0
   },
   {
+   "name": "q4k_dot_k",
+   "lookup": "q4k_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 56,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 60,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 64,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 72,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
    "name": "q5k_dequant",
    "lookup": "q5k_dequant",
    "args": [
@@ -9106,6 +9514,80 @@
     }
    ],
    "kernarg_size": 80,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "q5k_dot_k",
+   "lookup": "q5k_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 56,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 60,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 64,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 72,
    "group_segment": 0,
    "private_segment": 0
   },
@@ -9298,6 +9780,134 @@
     }
    ],
    "kernarg_size": 24,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "q8_0_dot_k",
+   "lookup": "q8_0_dot_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 48,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 56,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 60,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 64,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 72,
+   "group_segment": 0,
+   "private_segment": 0
+  },
+  {
+   "name": "quant_rows_fast_k",
+   "lookup": "quant_rows_fast_k",
+   "args": [
+    {
+     "off": 0,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 8,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 16,
+     "size": 8,
+     "kind": "global_buffer"
+    },
+    {
+     "off": 24,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 28,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 32,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 36,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 40,
+     "size": 4,
+     "kind": "by_value"
+    },
+    {
+     "off": 44,
+     "size": 4,
+     "kind": "by_value"
+    }
+   ],
+   "kernarg_size": 48,
    "group_segment": 0,
    "private_segment": 0
   },

@@ -75,7 +75,8 @@ def gen_asm() -> str:
 
 
 def main() -> int:
-    idx = json.loads((ROOT / "build/flashnext-iq3s-shard1.index.json").read_text(encoding="utf-8"))
+    from gguf_sample import load_index
+    idx = load_index()
     t = next(x for x in idx["tensors"] if x["type"] == "Q2_0" and x["shape"][0] % 64 == 0)
     nblocks = 2048
     src = pathlib.Path(idx["sources"][t["source"]]["path"])

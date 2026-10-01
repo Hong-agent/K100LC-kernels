@@ -11,7 +11,7 @@
 #include <cstdint>
 #include "kv_pack.h"
 
-#define HD   256           // head_dim（Qwen3.8-27B 的全注意力层）
+#define HD   256           // head_dim
 #define KD   (HD / KVEL)   // 每行多少个 dword（int8: 64，int4: 32）
 #define QG   128           // Q/K 沿 d 的量化组
 #define NQG  (HD / QG)     // 2 组

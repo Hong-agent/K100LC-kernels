@@ -7,7 +7,7 @@
 反量化过程照抄 llama.cpp / ggml 的 `ggml-common.h` + `ggml-quants.c`（MIT），
 码本由 `tools/iq_tables.py` 提供（`tools/extract_iq_tables.py` 生成）。
 
-覆盖 Qwen3.8-Flash-Next（`qwen4exp`）IQ3_S 实际出现的全部编码：
+覆盖本包已支持的全部 GGUF 编码：
 
 | 编码 | 块（元素/字节） | 布局要点 |
 |---|---|---|
@@ -21,6 +21,7 @@
 | `IQ2_S` | 256 / 82 | 8 元素网格（1024×u64）+ 符号字节 + 4 bit 尺度 |
 | `IQ3_S` | 256 / 110 | 4 元素网格（512×u32）+ 符号 + 每 64 元素 2×4 bit 尺度 |
 | `Q8_0` | 32 / 34 | int8 + f16 尺度 |
+| `Q4_0` | 32 / 18 | 4 bit + f16 尺度，值 `(码-8)×d` |
 | `BF16` / `F16` / `F32` | 1 / 2,2,4 | 直读 |
 
     python3 tools/iq_dequant.py --selftest     # 每种编码的结构自检
@@ -45,7 +46,8 @@ GEOMETRY: dict[str, tuple[int, int]] = {
     "Q2_0": (64, 18), "IQ4_NL": (32, 18), "IQ4_XS": (256, 136),
     "Q6_K": (256, 210), "Q5_K": (256, 176), "Q4_K": (256, 144),
     "IQ3_XXS": (256, 98), "IQ2_S": (256, 82), "IQ3_S": (256, 110),
-    "Q8_0": (32, 34), "BF16": (1, 2), "F16": (1, 2), "F32": (1, 4),
+    "Q8_0": (32, 34), "Q4_0": (32, 18),
+    "BF16": (1, 2), "F16": (1, 2), "F32": (1, 4),
 }
 
 _KMASK = [int(v) for v in kmask_iq2xs]                  # 1,2,4,…,128
@@ -118,6 +120,17 @@ def dequant_q8_0(raw: bytes) -> np.ndarray:
     d = _f16(buf, 0)[:, None]
     q = np.ascontiguousarray(buf[:, 2:34]).view(np.int8).astype(np.float32)
     return (q * d).reshape(-1)
+
+
+def dequant_q4_0(raw: bytes) -> np.ndarray:
+    """Q4_0：32 元素 / 18 字节；低半字节 = 元素 0..15，高半字节 = 16..31，值 = d*(q-8)。"""
+    buf = _blocks(raw, "Q4_0")
+    d = _f16(buf, 0)[:, None]
+    qs = buf[:, 2:18].astype(np.int32)
+    out = np.empty((buf.shape[0], 32), dtype=np.float32)
+    out[:, 0:16] = (qs & 0x0F) - 8
+    out[:, 16:32] = (qs >> 4) - 8
+    return (out * d).reshape(-1)
 
 
 # ------------------------------------------------------------------ K-quant
@@ -247,6 +260,16 @@ def dequant_q8_0_fast(raw: bytes) -> np.ndarray:
     d = _f16(buf, 0)[:, None]
     q = np.ascontiguousarray(buf[:, 2:34]).view(np.int8).astype(np.float32)
     return (q * d).reshape(-1)
+
+
+def dequant_q4_0_fast(raw: bytes) -> np.ndarray:
+    buf = _blocks(raw, "Q4_0")
+    d = _f16(buf, 0)[:, None]
+    qs = buf[:, 2:18].astype(np.int32)
+    out = np.empty((buf.shape[0], 32), dtype=np.float32)
+    out[:, 0:16] = (qs & 0x0F) - 8
+    out[:, 16:32] = (qs >> 4) - 8
+    return (out * d).reshape(-1)
 
 
 def _scale_min_k4_vec(scales: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -418,7 +441,8 @@ DEQUANT = {
     "Q2_0": dequant_q2_0, "IQ4_NL": dequant_iq4_nl, "IQ4_XS": dequant_iq4_xs,
     "Q6_K": dequant_q6_k, "Q5_K": dequant_q5_k, "Q4_K": dequant_q4_k,
     "IQ3_XXS": dequant_iq3_xxs, "IQ2_S": dequant_iq2_s, "IQ3_S": dequant_iq3_s,
-    "Q8_0": dequant_q8_0, "BF16": dequant_bf16, "F16": dequant_f16, "F32": dequant_f32,
+    "Q8_0": dequant_q8_0, "Q4_0": dequant_q4_0,
+    "BF16": dequant_bf16, "F16": dequant_f16, "F32": dequant_f32,
 }
 
 

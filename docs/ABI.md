@@ -1,124 +1,140 @@
 # ABI 与调用约定
 
-## 1. 内核目录
+本文只讲二进制接口和运行时约定。逐类调用配方见
+[`KERNEL_CALLING.md`](KERNEL_CALLING.md)，119 个内核的逐参数表见
+[`KERNELS.md`](KERNELS.md)。
+
+## 1. 内核目录（catalog）
 
 `python/k100lc_kernels/catalog.json` 由 `tools/make_catalog.py` 从 HSACO
-metadata 生成。每项：
+metadata 生成，结构：
 
 ```json
-{"lookup": "gemv_f32_warp_k", "name": "_Z...", "args": [...],
- "kernarg_size": 40, "group_segment": 1024, "private_segment": 0}
+{
+  "version": 1,
+  "kernels": [
+    {
+      "name": "_Z9gemv_f32_kPKfS0_Pfjjj",
+      "lookup": "gemv_f32_k",
+      "args": [
+        {"off": 0, "size": 8, "kind": "global_buffer"},
+        {"off": 24, "size": 4, "kind": "by_value"},
+        {"off": 32, "size": 2, "kind": "hidden_group_size_x"}
+      ],
+      "kernarg_size": 40,
+      "group_segment": 0,
+      "private_segment": 0
+    }
+  ]
+}
 ```
 
-- `lookup`：传给 `Runtime.launch()` / `fm_launch()` 的名字。
-- `args`：显式参数顺序（`kind=by_value|global_buffer`）；`hidden_*` 由运行时填。
-- `private_segment > 0`：内核有 spill/scratch，当前运行时未接 scratch，
-  直接调用可能 fault。
+| 字段 | 含义 |
+|---|---|
+| `lookup` | 传给 `Runtime.launch()` / `fm_launch()` 的名字；模板实参已去掉空白 |
+| `name` | HSACO 里的 mangled 符号 |
+| `args` | 参数顺序、`off`、`size`、`kind` |
+| `kernarg_size` | kernarg 段大小 |
+| `group_segment` | LDS 字节数 |
+| `private_segment` | scratch 字节数；>0 的内核当前运行时无法直接跑 |
 
-## 2. 参数打包
+`C ABI` 侧的同一份表是 `prebuilt/nodtk_kernels.h`，由
+`tools/gen_kernel_table.py` 生成。
 
-- 指针参数：传设备指针（`fm_alloc` 返回值，u64）。
-- 标量：`u32/s32` 传整数；`f32` 传 Python `float`（运行时按 IEEE754 写 4B）。
-- `Runtime.launch/launch2d` 只接受**显式参数**，顺序与 catalog 中
-  `kind != hidden_*` 的项一致。
+## 2. kernarg 布局
+
+每个参数在 kernarg 段里有固定的 `(offset, size, kind)`：
+
+| kind | 编号 | 由谁填 |
+|---|---:|---|
+| `by_value` / `global_buffer` | 0 | 调用方的 `argv` |
+| `hidden_block_count_x/y/z` | 1 / 2 / 3 | 运行时按 grid 填 |
+| `hidden_group_size_x/y/z` | 4 / 5 / 6 | 运行时按 workgroup 填 |
+| `hidden_remainder_x/y/z` | 7 / 8 / 9 | 运行时按余数填 |
+| `hidden_global_offset_x/y/z` | 10 / 11 / 12 | 运行时填 0 |
+| `hidden_grid_dims` | 13 | 运行时按 1D/2D 填 |
+
+约定：
+
+* 显式参数连续排在前面，隐藏参数从第一个 `kind != 0` 的参数开始；
+  `fm_launch` 内部就是按这个边界数显式参数个数。
+* `argv[i]` 是 `uint64_t`；C 层只拷贝低 `size` 字节到 kernarg。
+  所以 f32 标量要把 IEEE754 位模式放在低 4 字节（Python `Runtime` 自动处理）。
+* 调用方给的 `argv` 长度必须等于显式参数个数，否则 `fm_launch` 返回 `-2`。
 
 ## 3. grid / workgroup
 
 ```
 Runtime.launch(name, grid, workgroup, argv)
-    grid       = number of workgroups (blocks) in x
-    workgroup  = threads per workgroup
+    grid       = x 方向 workgroup 个数
+    workgroup  = 每个 workgroup 的线程数
 
 Runtime.launch2d(name, gx, gy, wx, wy, argv)
-    (gx,gy)    = number of workgroups in x/y
-    (wx,wy)    = threads per workgroup in x/y
+    (gx,gy)    = x/y 方向 workgroup 个数
+    (wx,wy)    = x/y 方向线程数
 ```
 
-内核侧拿到的是 `v0 = threadIdx.x`、`s6 = blockIdx.x`、`blockIdx.y`。
-`hsa_job.run_one(grid=...)` 的 `grid` 是**总 work-item 数**，两者不要混。
+内核侧拿到的隐藏参数与 `v0` / `s6`：
 
-动态路径 `Runtime.launch_dyn` / `fm_launch_dyn` 接受完整参数布局
-`(off, size, kind)`（含 `hidden_*`），由 HSACO 旁边的 `catalog.json` 提供。
-它允许直接启动编译器新生成的内核，不必重建 `libfm_engine.so`。
+* `v0 = threadIdx.x`（0..workgroup-1）
+* `s6 = blockIdx.x`
+* y 方向的块数 / 线程数在 `hidden_block_count_y`、`hidden_group_size_y` 里
 
-## 4. 常用内核速查
+注意：`tools/kernel_lab.run_one` / `tools/hsa_job.py` 的 `grid` 是**总
+work-item 数**，内部会自己除 workgroup。两者不要混用。
 
-| lookup | 作用 | 显式参数 |
-|---|---|---|
-| `gemv_f32_k` | 老版 f32 GEMV，一 lane 一行 | `(w,x,y,nrows,k/4,64)` |
-| `gemv_f32_warp_k` | warp-per-row f32 GEMV | `(w,x,y,nrows,k,64)` |
-| `gemv_i8_k` | int8 权重 + f32 激活 GEMV | `(w,ws,x,y,nrows,ngroups,rowbytes,ws_stride,64)` |
-| `iq4nl_dequant_k` | IQ4_NL → f32 | `(w,y,nblocks,64)` |
-| `iq3xxs_dequant_k` | IQ3_XXS → f32 | `(w,y,grid,ksigns,nblocks,64)` |
-| `iq2s_dequant_k` | IQ2_S → f32 | `(w,y,grid,nblocks,64)` |
-| `iq3s_dequant_k` | IQ3_S → f32 | `(w,y,grid,nblocks,64)` |
-| `iq4xs_dequant_k` | IQ4_XS → f32 | `(w,y,nblocks,64)` |
-| `q2_0_dequant_k` | Q2_0 → f32 | `(w,y,nblocks,64)` |
-| `iq4nl_to_i8_k` | IQ4_NL → int8 + scale | `(w,out,scale,nblocks,64)` |
-| `fill_k` | 填充 f32 | `(y,value,n)` |
-| `silu_mul_k` | `y=silu(a)*b` | `(y,a,b,n)` |
-| `gelu_mul_k` | `y=gelu(a)*b`（tanh 近似） | `(y,a,b,n,64)` |
-| `q8_0_dequant_k` | Q8_0 → f32 | `(w,y,nblocks,64)` |
-| `q4_0_dequant_k` | Q4_0 → f32 | `(w,y,nblocks,64)` |
-| `softmax_k` | 行 softmax（warp/row） | `(y,x,rows,cols,64)` |
-| `q6k_dequant_k` / `q6k_dequant` | Q6_K → f32（DSL 编译） | `(w,y,nblocks)` |
-| `q4k_dequant` | Q4_K → f32（DSL 编译） | `(w,y,nblocks)` |
-| `q5k_dequant` | Q5_K → f32（DSL 编译） | `(w,y,nblocks)` |
-| `layernorm_k` | LayerNorm（warp/row） | `(y,x,w,b,rows,cols,eps,64)` |
-| `topk_k` | 行 top-k（KMAX=16） | `(x,idx,val,rows,cols,k)` |
-| `router_top10_k` | MoE 路由 top-10 + softmax/renorm | `(logits,ids,weights,rows,n_experts)` |
-| `iq4nl_dot_k` | IQ4_NL 原生解码 + 点积（32/块） | `(w,x,partial,nblocks,gs,nbpr,magic_nbpr,rows_per_exp,magic_rpe)` |
-| `iq3xxs_dot_k` | IQ3_XXS 原生解码 + 点积（256/块） | `(...,grid,ksigns)` |
-| `iq2s_dot_k` | IQ2_S 原生解码 + 点积（256/块） | `(...,grid)` |
-| `iq3s_dot_k` | IQ3_S 原生解码 + 点积（256/块） | `(...,grid)` |
-| `q2_0_dot_k` | Q2_0 原生解码 + 点积（64/块） | `(w,x,partial,...)` |
-| `iq4xs_dot_k` | IQ4_XS 原生解码 + 点积（256/块） | `(w,x,partial,...)` |
-| `q6k_dot_k` | Q6_K 原生解码 + 点积（256/块） | `(w,x,partial,...)` |
-| `reduce_blocks_k` | 每行 nbpr 个 partial 求和 | `(partial,y,nrows,nbpr)` |
-
-`*_dot_k` 完整签名（所有类型一致，类型差异只在块解码部分）：
-
-```
-<type>_dot_k(const uint8_t* w, const float* x, float* partial,
-             uint32_t nblocks, uint32_t group_size, uint32_t nbpr,
-             uint32_t magic_nbpr, uint32_t rows_per_exp, uint32_t magic_rpe,
-             [表指针...], const uint32_t* ids, uint32_t stride,
-             uint32_t rows_per_w, uint32_t magic_rpw)
-```
-
-一个 work-item 算「一个权重块 × 一行」的点积，写 `partial[块号]`；`reduce_blocks_k`
-再按 `nbpr` 个一份求和。`rows_per_exp`（x 侧每专家组行数）与 `rows_per_w`
-（权重侧每专家组行数）可以不同，gate/up 就是「10 个专家共用一份 x」。dense
-单矩阵时传 `ids=[0]`、`rows_per_exp = rows_per_w = 总行数`。
-| `sigmoid_mul_k` | `y=x*sigmoid(g)` | `(y,x,g,n)` |
-| `l2norm_k` | 每 S 维 L2 归一化 | `(x,S,eps)`，grid=rows |
-| `rmsnorm_gated_k` | RMSNorm + sigmoid 门 | `(y,x,w,g,D,eps)`，grid=rows |
-| `conv1d_silu_k` | 深度因果卷积 + SiLU | `(out,in,w,state,T,C,K)` |
-| `ssm_ab_gate_k` | a/b 投影 + beta/g | `(gab,beta,gg,wa,wb,x,dt,alog,Hv,K)`，grid=(Hv,T) |
-| `gdn_k2<32>` | GDN 递推（**private>0**） | `(out,q,k,v,g,beta,state,snap,T,Hk,Hv,D,rep)` |
-
-## 5. 新增内核
-
-1. 把 `.s` 放进 `kernels/asm/k_new/`，或加一个 `tools/gen_xxx.py`
-   （参考 `tools/gen_gemv_f32_warp.py`，在 `build_flashmoe.py` 的 `MODULES`
-   里注册）。
-2. `bash tools/build_all.sh`。
-3. 用 `python3 tools/gen_xxx.py` 或 `tools/kernel_lab.py` 做 bit-exact 对账。
-4. 更新 `CHANGELOG.md`。
-
-### 5.1 动态内核（推荐）
+## 4. 动态启动
 
 ```python
 rt = Runtime(hsaco="build/foo.hsaco", catalog="build/foo.catalog.json")
 rt.launch_dyn("foo", grid_x, 1, workgroup_x, 1, [a, b, out, n])
 ```
 
-`hsart_dispatch_dyn` 在运行时遍历 HSACO 符号表找 kernel object，并按 catalog
-里的参数布局填 `kernarg` 与 hidden 参数。当前一个进程只加载一个 HSACO；
-多个 HSACO 先用 `tools/merge_hsacos.py` 合并。
+`fm_launch_dyn` 在运行时从 HSACO 符号表解析 kernel object（支持 `foo`、
+`foo.k` 等符号形式），参数布局由 catalog 的 `args` 提供，运行时按 `kind`
+自动填隐藏参数。这样编译器新产出的 HSACO 不需要重新编译 `libfm_engine.so`。
 
-## 6. 从其他项目更新
+`Runtime.launch_any` 先走动态路径，catalog 里没有时退回静态表。
 
-`bash tools/update_from.sh <project-root>` 会同步 `kernels/asm/`、
-`kernel_spec.json`、`tools/gen_*.py` 与关键运行时文件，然后重建。合并冲突
-时以新项目为准；自定义改动请放在 `kernels/asm/k_new/` 或用新的生成器名。
+## 5. 一个进程一个 HSACO
+
+`fm_init` 一次只加载一份 HSACO。要同时用到多份 HSACO 的内核：
+
+```bash
+python3 tools/merge_hsacos.py a.hsaco b.hsaco -o merged.hsaco
+python3 tools/make_catalog.py merged.hsaco merged.catalog.json
+```
+
+然后 `Runtime(hsaco="merged.hsaco", catalog="merged.catalog.json")`。
+
+## 6. 真机限制
+
+* **2D grid 的 y 维不可靠**：实测 `quant_act` 第二行起输出错、
+  `gemm_w4a4` 第二块 NaN。优先用 1D 拆行或 1D flat 内核。
+* **`private_segment > 0` 不能直接跑**：当前 HSA queue 没有接 scratch
+  backing。涉及 `gdn_k`、`gdn_k2<32>`、`fa_int4`、`vit_attn_kernel`；调用前
+  用 `info(lookup)["private_segment"]` 判断。
+* **LDS 用量**：`group_segment` 大的内核（`fa_*`、`gemm_w4a4`、
+  `vit_attn_kernel`）对 workgroup 大小敏感，不要随意改。
+* **只支持 `/opt/hyhal`**。
+
+## 7. 高频内核速查
+
+| lookup | 作用 | 显式参数 |
+|---|---|---|
+| `gemv_f32_warp_k` | warp-per-row f32 GEMV | `(w,x,y,nrows,k,64)` |
+| `gemv_f32_k` | 老版 f32 GEMV | `(w,x,y,nrows,k/4,64)` |
+| `gemv_i8_k` | int8 权重 + f32 激活 | `(w,ws,x,y,nrows,ngroups,rowbytes,ws_stride,64)` |
+| `fill_k` | f32 填充 | `(y,value,n)` |
+| `silu_mul_k` | `y=silu(a)*b` | `(y,a,b,n)` |
+| `gelu_mul_k` | `y=gelu(a)*b` | `(y,a,b,n,64)` |
+| `softmax_k` | 行 softmax | `(y,x,rows,cols,64)` |
+| `layernorm_k` | LayerNorm | `(y,x,w,b,rows,cols,eps,64)` |
+| `rmsnorm_k` | RMSNorm | `(y,x,w,cols,eps,flag)`，grid=rows |
+| `topk_k` | 行 top-k | `(x,idx,val,rows,cols,k)` |
+| `router_top10_k` | MoE top-10 + softmax | `(logits,ids,weights,rows,n_experts)` |
+| `reduce_blocks_k` | `partial` 行归约 | `(partial,y,nrows,nbpr)` |
+| `int4_dot_k` | compressed-tensors INT4 融合点积 | 见 [`INT4.md`](INT4.md) |
+| `gemm_w4a4_flat` | W4A4 预填充 GEMM | `(aq,wq,asc,wsc,c,M,N,K,nbn,magic)` |
+
+其余 100 多个内核见 [`KERNELS.md`](KERNELS.md)。

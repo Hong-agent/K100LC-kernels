@@ -1,4 +1,4 @@
-# 由 tools/extract_iq_tables.py 生成，请勿手改。
+# 从 llama.cpp / ggml 的 ggml-common.h（MIT）整理出的数值表，请勿手改。
 # 来源：llama.cpp / ggml 的 ggml-common.h（MIT）。
 from __future__ import annotations
 
