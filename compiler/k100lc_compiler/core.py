@@ -340,8 +340,15 @@ class CodeGen:
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
                 n = node.func.id
-                if n in ("exp", "sqrt", "rsqrt", "fma", "fabs", "max", "min"):
+                if n in ("exp", "sqrt", "rsqrt", "fma", "fabs", "floor", "ceil",
+                         "trunc", "rint", "fract", "ubyte"):
                     return "f32"
+                if n in ("max", "min"):
+                    t0 = self.type_of(node.args[0]) if node.args else "f32"
+                    t1 = self.type_of(node.args[1]) if len(node.args) > 1 else "f32"
+                    if "f32" in (t0, t1):
+                        return "f32"
+                    return "s32" if "s32" in (t0, t1) else "u32"
                 if n in ("gid", "tid", "bid", "lane"):
                     return "u32"
                 if n in ("f32", "u32", "s32"):
@@ -649,26 +656,55 @@ class CodeGen:
             self.emit(f"v_and_b32_e32 v{r}, 0x7fffffff, v{v}")
             self._release(arg)
             return Val("v", r, "f32")
-        if n == "max":
+        if n in ("max", "min"):
             argv = [self.expr(x) for x in node.args]
+            if len(argv) != 2:
+                raise CompileError(f"{n} 需要两个参数")
+            is_f = "f32" in (argv[0].ty, argv[1].ty)
+            if not is_f and "s32" in (argv[0].ty, argv[1].ty):
+                raise CompileError(f"{n} 暂不支持 s32（编码表里没有 i32 的 max/min）")
             a, b = (self.as_vreg(x) for x in argv)
             r = self.alloc_tmp_v()
-            self.emit(f"v_max_f32_e32 v{r}, v{a}, v{b}")
+            if is_f:
+                if n == "max":
+                    self.emit(f"v_max_f32_e32 v{r}, v{a}, v{b}")
+                else:
+                    # 编码表里没有 f32 的 `v_min`（只有 `v_max` / `v_max3`），
+                    # 用 `-max(-a, -b)` 精确实现：浮点取负就是翻符号位。
+                    na, nb = self.alloc_tmp_v(), self.alloc_tmp_v()
+                    self.emit(f"v_xor_b32_e32 v{na}, 0x80000000, v{a}")
+                    self.emit(f"v_xor_b32_e32 v{nb}, 0x80000000, v{b}")
+                    self.emit(f"v_max_f32_e32 v{r}, v{na}, v{nb}")
+                    self.emit(f"v_xor_b32_e32 v{r}, 0x80000000, v{r}")
+                    self.free_tmp_v(na)
+                    self.free_tmp_v(nb)
+                ty = "f32"
+            else:
+                # 整数走无符号版本（v1.7.1 之前不管什么类型都发 v_max_f32，
+                # 整数会**静默算错**）
+                self.emit(f"{'v_max_u32_e32' if n == 'max' else 'v_min_u32_e32'} "
+                          f"v{r}, v{a}, v{b}")
+                ty = "u32"
             self._release(*argv)
-            return Val("v", r, "f32")
-        if n == "min":
-            # 编码表里没有 f32 的 `v_min`（只有 `v_max` / `v_max3`），
-            # 用 `-max(-a, -b)` 精确实现：浮点取负就是翻符号位。
+            return Val("v", r, ty)
+        if n in ("floor", "ceil", "trunc", "rint", "fract", "ubyte"):
             argv = [self.expr(x) for x in node.args]
-            a, b = (self.as_vreg(x) for x in argv)
-            na, nb = self.alloc_tmp_v(), self.alloc_tmp_v()
-            self.emit(f"v_xor_b32_e32 v{na}, 0x80000000, v{a}")
-            self.emit(f"v_xor_b32_e32 v{nb}, 0x80000000, v{b}")
+            v = self.as_vreg(argv[0])
             r = self.alloc_tmp_v()
-            self.emit(f"v_max_f32_e32 v{r}, v{na}, v{nb}")
-            self.emit(f"v_xor_b32_e32 v{r}, 0x80000000, v{r}")
-            self.free_tmp_v(na)
-            self.free_tmp_v(nb)
+            if n == "ubyte":
+                # 取整数的低 8 位按无符号转 f32（解码内核常用）
+                self.emit(f"v_cvt_f32_ubyte0_e32 v{r}, v{v}")
+            elif n == "ceil":
+                # 编码表里没有 v_ceil：ceil(x) = -floor(-x)
+                t = self.alloc_tmp_v()
+                self.emit(f"v_xor_b32_e32 v{t}, 0x80000000, v{v}")
+                self.emit(f"v_floor_f32_e32 v{r}, v{t}")
+                self.emit(f"v_xor_b32_e32 v{r}, 0x80000000, v{r}")
+                self.free_tmp_v(t)
+            else:
+                op = {"floor": "v_floor_f32_e32", "trunc": "v_trunc_f32_e32",
+                      "rint": "v_rndne_f32_e32", "fract": "v_fract_f32_e32"}[n]
+                self.emit(f"{op} v{r}, v{v}")
             self._release(*argv)
             return Val("v", r, "f32")
         raise CompileError(f"未知内建 {n}")

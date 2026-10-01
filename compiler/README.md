@@ -31,7 +31,12 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
 
 * 参数类型：`ptr[f32]`、`ptr[u32]`、`ptr[s32]`、`u32`、`s32`、`f32`
 * 内建：`gid()`、`tid()`、`bid()`、`lane()`、`exp`、`sqrt`、`rsqrt`、
-  `fma`、`fabs`、`max`、`min`；`f32()` / `u32()` / `s32()` 转换
+  `fma`、`fabs`、`max`、`min`、`floor`、`ceil`、`trunc`、`rint`（就近偶数）、
+  `fract`、`ubyte`（取整数低 8 位按无符号转 f32，解码内核常用）；
+  `f32()` / `u32()` / `s32()` 转换
+  * `max`/`min` 按操作数类型选指令：f32 走 `v_max_f32`（`min` 用
+    `-max(-a,-b)`，编码表没有 f32 的 `v_min`），u32 走 `v_max_u32`/`v_min_u32`，
+    s32 明确报错。**v1.7.1 之前不管什么类型都发 `v_max_f32`，整数会静默算错。**
 * 语句：赋值、`+= -= *= /=`、`if`（**varying 条件也支持 else**）、
   `for i in range(a, b)`、`break`/`continue`
 * 内存：`buf[index]` load/store，下标可以是 varying 表达式

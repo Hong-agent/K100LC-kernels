@@ -351,6 +351,67 @@ def idiv(x: ptr[f32], y: ptr[f32], n: u32):
     print("整数比较（12 项）+ 2 的幂除/取模 ok")
 
 
+def check_math_builtins(out_dir: pathlib.Path) -> None:
+    """回归：取整族内建 + `ubyte` + 整数 max/min。
+
+    `max`/`min` 原来不管操作数类型都发 `v_max_f32_e32`——整数会**静默按
+    浮点比大小**（`max(10, 9.5)` 之类的小整数恰好看不出来，大整数就错了）。
+    现在按类型选 `v_max_u32` / `v_min_u32`，s32 直接报错。
+    """
+    cases = [
+        ("floor", "floor(x[i])", lambda a: np.floor(a)),
+        ("ceil", "ceil(x[i])", lambda a: np.ceil(a)),
+        ("trunc", "trunc(x[i])", lambda a: np.trunc(a)),
+        ("rint", "rint(x[i])", lambda a: np.rint(a)),
+        ("fract", "fract(x[i])", lambda a: a - np.floor(a)),
+    ]
+    n = 16
+    x = np.linspace(-3.2, 3.7, n, dtype=np.float32)
+    for name, expr, ref_fn in cases:
+        src = f"""
+def mb(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        y[i] = {expr}
+"""
+        h = compile_source(src, out_dir, "mb")[0]
+        o = run_one(h, "mb",
+                    [{"buffer": "x"}, {"buffer": "y"},
+                     {"scalar": {"dtype": "u32", "value": n}}],
+                    {"x": {"dtype": "f32", "values": x.tolist()},
+                     "y": {"dtype": "f32", "values": [0.0] * n}},
+                    grid=n, workgroup=64)
+        d = float(np.abs(np.array(o["y"], np.float32) - ref_fn(x).astype(np.float32)).max())
+        assert d < 1e-5, f"{name}: max_abs={d}"
+
+    u = np.array([0, 1, 255, 256, 257, 300, 1024, 4095], np.float32)
+    int_cases = [
+        ("ubyte", "ubyte(u32(x[i]))",
+         lambda a: (a.astype(np.uint32) & 0xFF).astype(np.float32)),
+        ("u32 max", "f32(max(u32(x[i]), 300))",
+         lambda a: np.maximum(a.astype(np.uint32), np.uint32(300)).astype(np.float32)),
+        ("u32 min", "f32(min(u32(x[i]), 300))",
+         lambda a: np.minimum(a.astype(np.uint32), np.uint32(300)).astype(np.float32)),
+    ]
+    for name, expr, ref_fn in int_cases:
+        src = f"""
+def mb(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        y[i] = {expr}
+"""
+        h = compile_source(src, out_dir, "mb")[0]
+        o = run_one(h, "mb",
+                    [{"buffer": "x"}, {"buffer": "y"},
+                     {"scalar": {"dtype": "u32", "value": len(u)}}],
+                    {"x": {"dtype": "f32", "values": u.tolist()},
+                     "y": {"dtype": "f32", "values": [0.0] * len(u)}},
+                    grid=len(u), workgroup=64)
+        got = np.array(o["y"], np.float32)
+        assert np.array_equal(got, ref_fn(u)), f"{name}: {got} != {ref_fn(u)}"
+    print("取整族内建 + ubyte + 整数 max/min ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -363,6 +424,7 @@ def main() -> int:
     check_varying_else(out)
     check_dsl_surface(out)
     check_int_cmp_and_divmod(out)
+    check_math_builtins(out)
     return 0
 
 

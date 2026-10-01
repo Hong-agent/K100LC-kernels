@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.7.1
+
+编译器内建扩充，顺带修掉 `max`/`min` 对整数的静默错算。
+
+### 修复
+
+- **`max` / `min` 对整数会静默算错**：原来不管操作数类型都发
+  `v_max_f32_e32`，也就是说 `max(a, b)` 在两个 u32 上是**按浮点比较位模式**。
+  现在按类型选：f32 → `v_max_f32`（`min` 用 `-max(-a,-b)`），
+  u32 → `v_max_u32` / `v_min_u32`，s32 明确报错（编码表里没有 i32 版本）。
+
+### 新增
+
+取整族与解码常用内建（都能一条指令实现，`ceil` 是两条）：
+
+| 内建 | 指令 |
+|---|---|
+| `floor(x)` | `v_floor_f32_e32` |
+| `ceil(x)` | `-floor(-x)`（编码表没有 `v_ceil`） |
+| `trunc(x)` | `v_trunc_f32_e32` |
+| `rint(x)` | `v_rndne_f32_e32`（就近偶数，与 `lrintf` 一致） |
+| `fract(x)` | `v_fract_f32_e32` |
+| `ubyte(x)` | `v_cvt_f32_ubyte0_e32`（取低 8 位按无符号转 f32） |
+
+### 验证
+
+- `compiler/tests/test_examples.py::check_math_builtins`：6 个取整族内建 +
+  `ubyte` + u32 `max`/`min`，逐项与 NumPy 对账（`rint` 比的是就近偶数语义）。
+- 编译器回归 10 → 11 项；`bash tools/check_all.sh` 全绿。
+
 ## 1.7.0
 
 融合点积最后一块：`q6k_dot_k` 批量预载，MoE 口径 **2.35 倍**；11 个
