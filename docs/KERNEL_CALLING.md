@@ -366,10 +366,10 @@ fm_download(y_host, y, n * 4);
 | `fill_k` | `(y, value, n)` | grid-stride；`ceil(n/64)`，wg=64 |
 | `add_inplace_k` | `(y, x, n)` | grid-stride；`ceil(n/64)`，wg=64 |
 | `scale_mul_k` | `(y, scale, n)` | grid-stride；`ceil(n/64)`，wg=64 |
-| `silu_mul_k` | `(y, a, b, n)` | grid-stride；`ceil(n/64)`，wg=64 |
+| `silu_mul_k` | `(y, a, b, n)` | `y = silu(a) * b`；grid-stride；`ceil(n/64)`，wg=64 |
 | `gelu_mul_k` | `(y, gate, up, n, 64)` | `ceil(n/64)`，wg=64；第 5 个参数固定 64 |
-| `sigmoid_mul_k` | `(y, x, g, n)` | grid-stride；`ceil(n/64)`，wg=64 |
-| `concat2_k` | `(y, a, b, pre, n)` | grid-stride；`ceil(n/64)`，wg=64 |
+| `sigmoid_mul_k` | `(y, x, g, n)` | `y = x * sigmoid(g)`——注意与 `silu_mul_k` 相反，门控在**第 3 个**参数上；grid-stride；`ceil(n/64)`，wg=64 |
+| `concat2_k` | `(y, a, b, pre, n)` | **按 `pre` 分块交替交织**（不是单纯拼接）：`q = i//pre, r = i%pre, y[i] = (q 偶 ? a : b)[(q//2)*pre + r]`；grid-stride；`ceil(n/64)`，wg=64 |
 | `l2norm_k` | `(x, S, eps)` | grid = 行数，wg=64；原地归一化 |
 
 ```python
@@ -381,6 +381,7 @@ rt.launch("gelu_mul_k", (n + 63) // 64, 64, [py, pg, pu, n, 64])
 | lookup | argv | grid / workgroup | 约束 |
 |---|---|---|---|
 | `rmsnorm_k` | `(y, x, w, cols, eps, flag)` | grid=rows，wg=64 | `cols % 64 == 0`；实测 `flag=0` 使用 `w`，非 0 使用 `1+w` |
+| `rmsnorm_gated_k` | `(y, x, w, gate, cols, eps)` | grid=rows，wg=64 | `y = rms(x) * w * silu(gate)`——门控是 **SiLU**，不是逐元素相乘 |
 | `layernorm_k` | `(y, x, w, b, rows, cols, eps, 64)` | grid=rows，wg=64 | `cols % 64 == 0` |
 | `softmax_k` | `(y, x, rows, cols, 64)` | grid=rows，wg=64 | `cols % 64 == 0` |
 | `topk_k` | `(x, idx, val, rows, cols, k)` | `ceil(rows/64)`，wg=64 | `k <= 16` |

@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.4.0
+
+发货产物自检基线，以及一批实测语义修正。
+
+### 新增
+
+- `tools/selftest_all.py`：**针对 `prebuilt/` 那份内核包**的全内核对账基线。
+  直接加载 `prebuilt/k100lc_kernels.hsaco` + `libfm_engine.so`，走用户会走的
+  `Runtime.launch` 路径，与 NumPy / `tools/iq_dequant.py` 的参考实现对账。
+  46 个用例覆盖逐元素 / 归一化 / softmax / top-k / router / MoE / GEMV /
+  11 类 GGUF 量化解码 / 融合点积 / `reduce_blocks_k`。支持 `--group`、
+  `--only`、`--repeat`、`--json`（可当性能与对账的回归基准）。
+  各生成器自带的自检只管「现场重新汇编的那份」，覆盖不到打包产物。
+- `ROADMAP.md`：长期推进清单（效率 / 特性 / 编译器）与当前状态。
+
+### 修复
+
+- `Runtime.launch` / `_pack_argv` 支持 numpy 标量（`np.float32`、`np.int32`…）。
+  之前把 `np.float32` 直接传进 argv 会 `TypeError`，从数组里取标量是很自然的写法。
+
+### 实测确认（写进文档与自检）
+
+- `sigmoid_mul_k(y, a, b, n)` 是 `y = a * sigmoid(b)`——门控在**第 3 个**参数上，
+  与 `silu_mul_k(y, a, b, n) = silu(a) * b` 相反，容易误用。
+- `rmsnorm_gated_k(y, x, w, gate, cols, eps)` 的门控是 **SiLU**：
+  `y = rms(x) * w * silu(gate)`。
+- `rmsnorm_k` 第 6 个参数是 flag：`flag=0` 才是标准 RMSNorm，非 0 等价于用
+  `(1+w)` 代替 `w`（`model.RMSNorm` 传的是 0）。
+- `concat2_k(y, a, b, pre, n)` 是**按 `pre` 分块交替交织**，不是拼接。
+
+### 验证
+
+- `python3 tools/selftest_all.py`：46 个用例全部通过。
+
 ## 1.3.0
 
 MoE token→expert 分桶，以及合并内核的通用化重写。

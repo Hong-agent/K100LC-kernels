@@ -83,8 +83,12 @@ class Runtime:
         if n > len(buf):
             buf = self._argv_buf = (ctypes.c_uint64 * n)()
         for i, v in enumerate(argv):
-            if type(v) is float:
-                buf[i] = struct.unpack("<I", struct.pack("<f", v))[0]
+            # 允许传 numpy 标量（np.float32 / np.int32 ...）：用户从数组里
+            # 取出来的标量很常见，之前会直接 TypeError。
+            if isinstance(v, (float, np.floating)):
+                buf[i] = struct.unpack("<I", struct.pack("<f", float(v)))[0]
+            elif isinstance(v, np.integer):
+                buf[i] = int(v)
             else:
                 buf[i] = v
         return buf
