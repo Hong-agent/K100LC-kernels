@@ -42,7 +42,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| B1 | 全内核性能基线 | 部分完成 | `tools/bench_decode.py` 已覆盖解码全通路；还缺 attention / norm / MoE 等族的吞吐基线 |
+| B1 | 全内核性能基线 | 部分完成 | `tools/bench_decode.py` 已覆盖解码全通路 + **`--layers N` 端到端权重流**（400 层：W4A8 33.1 ms/token、W4A4 29.3 ms/token）；还缺 attention / norm 等族的吞吐基线 |
 | B2 | 预填充 INT4 GEMM | 待办（需改内核） | `N=17408 K=5120` 实测：**M=128 20.2、M=256 30.7、M=512、38.1、M=1024 41.8 TMAC/s**（峰值 78）。大 M 稳定 ~54%，小 M 掉到 26%。原因：grid 只按 `(M/128)×(N/64)` 切，M=128 时**只有 272 个 workgroup**（120 CU 才 2.27 个/CU），延迟掩盖不住。**已否掉一个错误方案**：按 K 对半拆成两次 GEMM 并不能提高并行度（grid 与 K 无关），必须上 **split-K 内核**（部分和 + reduce）或把 BM 从 128 改小——两者都要改那个 500+ 行的手写 GEMM |
 | B3 | 解码注意力（长上下文） | 待办 | `fa_decode_k` / `fa_decode_rows_k` 的 KV 访存与 GQA 复用 |
 | B4 | 融合算子 | 待办 | RMSNorm+量化、rope+KV 写入、split_qkv+norm（后者已有 `k_gdn_split_norm_k`）等 |

@@ -84,6 +84,8 @@ def main() -> int:
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--threads", type=int, default=256)
     ap.add_argument("--paths", default="w4a4,w4a8,w4a4r2,ct4,gguf,f32")
+    ap.add_argument("--layers", type=int, default=0,
+                    help=">0 时额外跑「连续入队 N 层、只 sync 一次」，报 ms/token")
     args = ap.parse_args()
 
     n, k, iters = args.n, args.k, args.iters
@@ -264,6 +266,54 @@ def main() -> int:
         def run_f():
             rt.launch("gemv_f32_warp_k", nf, 64, [pw, px, py, nf, k, 64])
         report("gemv_f32_warp_k", b.time(run_f, iters), w.nbytes)
+        b.free()
+
+    # ---------------- 端到端：连续入队 N 层、只 sync 一次 ----------------
+    if args.layers > 0 and want & {"w4a4", "w4a8"}:
+        print(f"[端到端] 连续入队 {args.layers} 层（复用同一份权重，模拟逐 token 的"
+              f"权重流），只 sync 一次")
+        wq = np.ascontiguousarray(rng.integers(0, 1 << 32, size=n * (k // 8),
+                                               dtype=np.uint64).astype(np.uint32))
+        ws = (rng.uniform(1e-3, 5e-2, size=n * (k // 128)).astype(np.float32)
+              .view(np.uint32) & np.uint32(0xFFFF0000)) >> 16
+        ws = np.ascontiguousarray(ws.astype(np.uint16))
+        pwq, pws = b.upload("lwq", wq), b.upload("lws", ws)
+        x = rng.standard_normal(k).astype(np.float32)
+        px = b.upload("lx", x)
+        nwarp = args.threads // 64
+        for path in ("w4a8", "w4a4"):
+            if path not in want:
+                continue
+            if path == "w4a8":
+                ae = b.buf("lae", k // 2)
+                ao = b.buf("lao", k // 2)
+                asc = b.buf("lasc", (k // 128) * 4)
+                asu = b.buf("lasu", (k // 128) * 4)
+                grid = (n + nwarp - 1) // nwarp
+
+                def run_layer():
+                    rt.launch("quant_act", k // 128, 32,
+                              [px, ae, ao, asc, asu, 1, k])
+                    rt.launch("gemv_w4a8<1,false,1>", grid, args.threads,
+                              [pwq, pws, ae, ao, asc, asu, px, n, k])
+            else:
+                aq = b.buf("laq", k // 2)
+                asc = b.buf("lasc4", (k // 32) * 4)
+                grid = (n + nwarp - 1) // nwarp
+
+                def run_layer():
+                    rt.launch("quant_act4", k // 32, 32, [px, aq, asc, 1, k])
+                    rt.launch("gemv_w4a4<1>", grid, args.threads,
+                              [pwq, pws, aq, asc, px, n, k])
+            run_layer()
+            rt.sync()
+            t0 = time.perf_counter()
+            for _ in range(args.layers):
+                run_layer()
+            rt.sync()
+            ms = (time.perf_counter() - t0) * 1e3
+            print(f"  {path}: {args.layers} 层 {ms:7.2f} ms → {ms / args.layers * 1e3:6.1f}"
+                  f" us/层   {wq.nbytes / (ms / args.layers * 1e-3) / 1e9:5.1f} GB/s")
         b.free()
 
     return 0
