@@ -59,6 +59,15 @@ void*     g_karg[N_SLOT];
 hsa_signal_t g_sig[N_SLOT];
 bool      g_slot_used[N_SLOT];
 int       g_next = 0;
+// 自上次「全同步」以来投递过、还没等过的槽数。同步只需要等这几只，
+// 不必每次扫满 N_SLOT 个信号（之前每次 sync 都要过一遍 64 个信号，
+// 实测单次 sync 因此要 ~10 us）。
+int       g_pending = 0;
+
+// 内核名 → 表项 的哈希缓存：hsart_lookup 被每次 launch 调用，原来是对
+// k_table（122 项）做线性扫描 + std::string 比较，实测吃掉每次 launch
+// 好几微秒。
+std::unordered_map<std::string, const RtKernel*> g_lookup;
 
 std::mutex g_mtx;
 
@@ -342,8 +351,14 @@ const RtKernel* hsart_lookup(const char* name) {
     norm_buf.clear();
     for (const char* p = name; *p; p++)
         if (*p != ' ' && *p != '\t' && *p != '\n') norm_buf.push_back(*p);
+    auto it = g_lookup.find(norm_buf);
+    if (it != g_lookup.end()) return it->second;
+    // 未命中才做线性扫描（首次调用 / 名字真不存在），并把结果缓存下来
     for (int i = 0; i < k_table_n; i++)
-        if (norm_buf == k_table[i].lookup) return &k_table[i];
+        if (norm_buf == k_table[i].lookup) {
+            g_lookup.emplace(norm_buf, &k_table[i]);
+            return &k_table[i];
+        }
     return nullptr;
 }
 
@@ -447,6 +462,7 @@ static void dispatch_packet(uint64_t kobj, const char* dbg_name, dim3 grid, dim3
     hsa_signal_store_screlease(g_queue->doorbell_signal, index);
     g_slot_used[slot] = true;
     g_next = (g_next + 1) % N_SLOT;
+    if (g_pending < N_SLOT) g_pending++;
 }
 
 void hsart_dispatch(const RtKernel* k, dim3 grid, dim3 block, int smem,
@@ -501,10 +517,16 @@ hipError_t hipFree(void* p) {
 hipError_t hipDeviceSynchronize() {
     if (!g_queue) return hipSuccess;
     std::lock_guard<std::mutex> lk(g_mtx);
-    for (int i = 0; i < N_SLOT; i++)
+    // 只等自上次同步以来投递过的槽（单队列 in-order，槽按投递顺序轮转）。
+    // 原来每次都把 64 个信号扫一遍，空转等待开销 ~10 us/次。
+    const int start = (g_next + N_SLOT - g_pending) % N_SLOT;
+    for (int k = 0; k < g_pending; k++) {
+        const int i = (start + k) % N_SLOT;
         if (g_slot_used[i])
             hsa_signal_wait_scacquire(g_sig[i], HSA_SIGNAL_CONDITION_LT, 1, UINT64_MAX,
                                       HSA_WAIT_STATE_ACTIVE);
+    }
+    g_pending = 0;
     return hipSuccess;
 }
 

@@ -630,6 +630,146 @@ def t_int4_dot(ctx: Ctx):
 
 
 # ---------------------------------------------------------------------------
+# G. RT4 解码通路（W4A4 / W4A8）—— math 见 kernels/gemv_w4a4_core.h
+# ---------------------------------------------------------------------------
+def pack_int4_lo(v: np.ndarray) -> np.ndarray:
+    """(R,K) 有符号 int4 → (R,K/8) u32，**低半字节 = 更小的 k**。"""
+    r, k = v.shape
+    out = np.zeros((r, k // 8), dtype=np.uint32)
+    for j in range(8):
+        out |= (v[:, j::8].astype(np.uint32) & 0xF) << np.uint32(4 * j)
+    return out
+
+
+def unpack_int4_lo(u: np.ndarray, k: int) -> np.ndarray:
+    """(R,K/8) u32 → (R,K) int32（符号扩展的两补码 int4）。"""
+    u = np.asarray(u, dtype=np.uint32)
+    out = np.empty((u.shape[0], k), dtype=np.int32)
+    for j in range(8):
+        nib = ((u >> np.uint32(4 * j)) & np.uint32(0xF)).astype(np.int32)
+        out[:, j::8] = np.where(nib >= 8, nib - 16, nib)
+    return out
+
+
+def quant_act4_ref(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """主机侧 `quant_act4`：组=32，`s = amax/7`（amax=0 时 1），q 夹到 [-8,7]。"""
+    m, k = x.shape
+    xg = x.reshape(m, k // 32, 32)
+    amax = np.abs(xg).max(axis=2)
+    s = np.where(amax > 0, amax / 7.0, 1.0).astype(np.float32)
+    q = np.rint(xg / s[:, :, None]).astype(np.int32)
+    q = np.clip(q, -8, 7)
+    return q.reshape(m, k), s
+
+
+def quant_act_ref(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """主机侧 `quant_act`：组=128，`s = amax/127`，q 夹到 [-128,127]。"""
+    m, k = x.shape
+    xg = x.reshape(m, k // 128, 128)
+    amax = np.abs(xg).max(axis=2)
+    s = np.where(amax > 0, amax / 127.0, 1.0).astype(np.float32)
+    q = np.rint(xg / s[:, :, None]).astype(np.int32)
+    q = np.clip(q, -128, 127)
+    return q.reshape(m, k), s
+
+
+def w4_gemv_ref(wq: np.ndarray, ws: np.ndarray, qa: np.ndarray,
+                asc: np.ndarray, k: int, grp_a: int) -> np.ndarray:
+    """`y = Σ_g ws[n,g] · Σ_{k∈g} w[n,k]·(q[m,k]·asc[m,k//grp_a])`；返回 [M,N]。
+
+    与内核一致：**整数组内先做精确 int32 点积**，再用该子组的 f32 尺度缩放，
+    最后按权重组乘 `ws` 累加（避免「先逐元素乘尺度再求和」带来的参考误差）。
+    """
+    wv = unpack_int4_lo(wq, k).astype(np.float32)
+    grp = k // ws.shape[1]                       # 权重组（128）
+    ngrp = ws.shape[1]
+    wsc = ws.view(np.float16).astype(np.float64)
+    a = qa.astype(np.float64)
+    m = qa.shape[0]
+    y = np.zeros((m, wv.shape[0]), dtype=np.float64)
+    sub = grp // grp_a                           # 每组里几个激活子组
+    for g in range(ngrp):
+        sl = slice(g * grp, (g + 1) * grp)
+        acc = np.zeros_like(y)
+        for s in range(sub):
+            kk = slice(g * grp + s * grp_a, g * grp + (s + 1) * grp_a)
+            acc += asc[:, g * sub + s][:, None] * (
+                a[:, kk] @ wv[:, kk].T.astype(np.float64))
+        y += acc * wsc[:, g][None, :]
+    return y.astype(np.float32)
+
+
+def _w4_setup(ctx: Ctx, n: int, k: int, m: int, seed: int):
+    rng = np.random.default_rng(seed)
+    wq_h = rng.integers(-8, 8, size=(n, k)).astype(np.int32)
+    ws_h = rng.uniform(0.5, 1.5, size=(n, k // 128)).astype(np.float32).astype(np.float16)
+    x = rng.standard_normal((m, k)).astype(np.float32)
+    wq = ctx.buf(pack_int4_lo(wq_h))
+    ws = ctx.buf(ws_h)
+    px = ctx.buf(x)
+    return wq, ws, px, x, wq_h, ws_h
+
+
+@case("w4", "w4a4 M=1（量化+GEMV 全对账）")
+def t_w4a4_m1(ctx: Ctx):
+    n, k = 256, 5120
+    wq, ws, px, x, wq_h, ws_h = _w4_setup(ctx, n, k, 1, 60)
+    qa, asc = quant_act4_ref(x)
+    paq = ctx.buf(pack_int4_lo(qa.reshape(1, k)))
+    pasc = ctx.buf(asc.reshape(-1))
+    py = ctx.out(n)
+    ctx.launch("gemv_w4a4<1>", (n + 3) // 4, 256, [wq, ws, paq, pasc, py, n, k])
+    ref = w4_gemv_ref(pack_int4_lo(wq_h), ws_h, qa, asc, k, 32)
+    return judge(np.abs(ctx.get(py, n) - ref[0]).max(), ref)
+
+
+@case("w4", "w4a4 M=4（量化+GEMV 全对账）")
+def t_w4a4_m4(ctx: Ctx):
+    n, k, m = 256, 5120, 4
+    wq, ws, px, x, wq_h, ws_h = _w4_setup(ctx, n, k, m, 61)
+    qa, asc = quant_act4_ref(x)
+    paq = ctx.buf(pack_int4_lo(qa))
+    pasc = ctx.buf(asc.reshape(-1))
+    py = ctx.out(m * n)
+    ctx.launch("gemv_w4a4<4>", (n + 3) // 4, 256, [wq, ws, paq, pasc, py, n, k])
+    ref = w4_gemv_ref(pack_int4_lo(wq_h), ws_h, qa, asc, k, 32)
+    got = ctx.get(py, m * n).reshape(m, n)
+    return judge(np.abs(got - ref).max(), ref)
+
+
+@case("w4", "w4a4 双行 M=4（r2_k）")
+def t_w4a4_r2(ctx: Ctx):
+    n, k, m = 256, 5120, 4
+    wq, ws, px, x, wq_h, ws_h = _w4_setup(ctx, n, k, m, 62)
+    qa, asc = quant_act4_ref(x)
+    paq = ctx.buf(pack_int4_lo(qa))
+    pasc = ctx.buf(asc.reshape(-1))
+    py = ctx.out(m * n)
+    ctx.launch("gemv_w4a4_r2_k", (n + 7) // 8, 256, [wq, ws, paq, pasc, py, n, k])
+    ref = w4_gemv_ref(pack_int4_lo(wq_h), ws_h, qa, asc, k, 32)
+    got = ctx.get(py, m * n).reshape(m, n)
+    return judge(np.abs(got - ref).max(), ref)
+
+
+@case("w4", "w4a8 M=1（量化+GEMV 全对账）")
+def t_w4a8_m1(ctx: Ctx):
+    n, k = 256, 5120
+    wq, ws, px, x, wq_h, ws_h = _w4_setup(ctx, n, k, 1, 63)
+    qa, asc = quant_act_ref(x)
+    # quant_act 把偶/奇下标的量化值拆成两条 int8 流
+    pae = ctx.buf(qa[:, 0::2].astype(np.int8))
+    pao = ctx.buf(qa[:, 1::2].astype(np.int8))
+    pasc = ctx.buf(asc.reshape(-1))
+    asum = qa.reshape(1, k // 128, 128).sum(axis=2).astype(np.int32)
+    pasu = ctx.buf(asum.reshape(-1))
+    py = ctx.out(n)
+    ctx.launch("gemv_w4a8<1,false,1>", (n + 3) // 4, 256,
+               [wq, ws, pae, pao, pasc, pasu, py, n, k])
+    ref = w4_gemv_ref(pack_int4_lo(wq_h), ws_h, qa, asc, k, 128)
+    return judge(np.abs(ctx.get(py, n) - ref[0]).max(), ref)
+
+
+# ---------------------------------------------------------------------------
 # 运行器
 # ---------------------------------------------------------------------------
 def main() -> int:

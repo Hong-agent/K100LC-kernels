@@ -139,6 +139,11 @@ with RT4File("/path/model.rt4") as f:
 
 预填充用 `upload_weight_gemm` + `W4Runner.gemm`（M 必须是 128 的倍数）。
 
+> **`threads` 必须保持默认的 256。** `gemv_w4a4<M>` / `gemv_w4a8<M,*,*>` 把
+> 「每个 workgroup 4 个 warp、每个 warp 一行权重」写死在代码里，grid 也按
+> `ceil(N/4)` 算。传别的 workgroup 大小不会报错，但会**静默算错**（实测
+> `threads=512` 时约一半的行是错的）。`gemv_device` 现在会直接拒绝非 256 的取值。
+
 ### 3.5 把 compressed-tensors INT4 切到最快通路
 
 compressed-tensors 的 `weight_packed` 与 RT4 的 q 区在字节布局上完全一致

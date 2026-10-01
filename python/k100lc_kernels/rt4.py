@@ -236,6 +236,13 @@ class W4Runner:
                 raise ValueError("x_dev 模式需要同时指定 m（x 的行数）")
         if m not in (1, 2, 3, 4):
             raise ValueError(f"W4 GEMV 只支持 M=1..4（当前 {m}），预填充请走 GEMM")
+        # 这批 GEMV 内核把「每个 workgroup 4 个 warp、每个 warp 一行」写死在
+        # 代码里（行号 = flat_block*4 + warp）。换别的 workgroup 大小不会报错，
+        # 只会**静默算错**（实测 threads=512 时约一半行是错的），所以这里直接拦住。
+        if threads != 256:
+            raise ValueError(
+                f"W4 GEMV（w4a8/w4a4）要求 threads=256（每 workgroup 4 行）；"
+                f"当前 {threads} 会算出错误结果")
         nwarp = threads // 64
         px = int(x_dev) if x_dev is not None else self._buf("x", m * k * 4)
         py = int(y_dev) if y_dev is not None else self._buf("y", m * n * 4)

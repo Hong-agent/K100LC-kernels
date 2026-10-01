@@ -14,11 +14,25 @@
   `--only`、`--repeat`、`--json`（可当性能与对账的回归基准）。
   各生成器自带的自检只管「现场重新汇编的那份」，覆盖不到打包产物。
 - `ROADMAP.md`：长期推进清单（效率 / 特性 / 编译器）与当前状态。
+- `tools/bench_decode.py`：解码（M=1..4）权重带宽基准，把每条通路的
+  us/层与 GB/s 量出来；覆盖 W4A4/W4A8（含激活量化）、双行变体、
+  compressed-tensors INT4、GGUF 原生点积、f32 参考路。
+
+### 优化
+
+- 运行时内核名查找改成哈希缓存（原来每次 launch 都对 122 项内核表做线性
+  扫描 + `std::string` 比较）。
+- `hipDeviceSynchronize` 只等「自上次同步以来投递过」的槽，不再每次把 64 个
+  完成信号全扫一遍。
 
 ### 修复
 
 - `Runtime.launch` / `_pack_argv` 支持 numpy 标量（`np.float32`、`np.int32`…）。
   之前把 `np.float32` 直接传进 argv 会 `TypeError`，从数组里取标量是很自然的写法。
+- `W4Runner.gemv_device` 显式校验 `threads == 256`。`gemv_w4a4<M>` /
+  `gemv_w4a8<M,*,*>` 把「每 workgroup 4 个 warp、每 warp 一行」写死在代码里，
+  传别的 workgroup 大小**不报错、只是静默算错**（实测 `threads=512` 时约一半
+  行是错的，且因为少算了行看起来还“快”了 1.7 倍）。
 
 ### 实测确认（写进文档与自检）
 
@@ -29,10 +43,28 @@
 - `rmsnorm_k` 第 6 个参数是 flag：`flag=0` 才是标准 RMSNorm，非 0 等价于用
   `(1+w)` 代替 `w`（`model.RMSNorm` 传的是 0）。
 - `concat2_k(y, a, b, pre, n)` 是**按 `pre` 分块交替交织**，不是拼接。
+- 自检新增 **w4** 组：W4A4（M=1/M=4/双行）与 W4A8 的「激活量化 + GEMV」
+  全对账，参考实现直接按 `kernels/gemv_w4a4_core.h` / `gemv_w4a8_core.h`
+  的公式写（组内精确 int32 点积、再乘子组尺度）。这条通路此前**零覆盖**。
 
 ### 验证
 
-- `python3 tools/selftest_all.py`：46 个用例全部通过。
+- `python3 tools/selftest_all.py`：50 个用例全部通过。
+- `python3 tools/bench_decode.py --n 17408 --k 5120 --iters 60`（实测，含激活量化）：
+
+| 通路 | us/层 | GB/s | 峰值占比 |
+|---|---:|---:|---:|
+| W4A4 M=1 | 84.2 | 546 | 61% |
+| W4A4 M=4 | 128.8 | 357 | 40% |
+| W4A4 双行 M=4 | 117.5 | 391 | 44% |
+| W4A8 M=1 | 83.3 | 552 | 62% |
+| W4A8 M=4 | 134.5 | 342 | 38% |
+| int4_dot_k（W4A16） | 260.6 | 176 | 20% |
+| iq4nl_dot_k | 466.3 | 108 | 12% |
+| q4k_dot_k | 274.9 | 182 | 20% |
+
+  连续入队（一次 sync）时 `gemv_w4a4<1>` 本体约 69 us（667 GB/s，74% 峰值），
+  激活量化再加约 5 us；剩下的是启动/往返延迟与流式带宽的差距。
 
 ## 1.3.0
 
