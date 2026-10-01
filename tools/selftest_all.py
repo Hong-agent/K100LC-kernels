@@ -770,6 +770,89 @@ def t_w4a8_m1(ctx: Ctx):
 
 
 # ---------------------------------------------------------------------------
+# H. 激活量化（所有量化通路的前置步骤）
+# ---------------------------------------------------------------------------
+def quant_rows_ref(x: np.ndarray, k: int, g: int) -> tuple[np.ndarray, np.ndarray]:
+    """主机侧 `quant_rows_fast_k` / `quant_rows_k`：组内 `s = amax/7`，夹 [-8,7]。
+
+    输出布局：`q[row][K/8]` 低半字节 = 偶数 k；`sc[组][row]`（组优先）。
+    """
+    rows = x.shape[0]
+    ng = k // g
+    q = np.zeros((rows, k // 8), dtype=np.uint32)
+    sc = np.zeros((ng, rows), dtype=np.float32)
+    for r in range(rows):
+        for gg in range(ng):
+            blk = x[r, gg * g:(gg + 1) * g]
+            amax = np.float32(np.abs(blk).max())
+            s = np.float32(amax / np.float32(7.0)) if amax > 0 else np.float32(1.0)
+            sc[gg, r] = s
+            codes = np.clip(np.rint(blk / s), -8, 7).astype(np.int64)
+            for e in range(0, g, 8):
+                w = 0
+                for j in range(8):
+                    w |= int(codes[e + j] & 0xF) << (4 * j)
+                q[r, (gg * g + e) // 8] = w
+    return q, sc
+
+
+@case("quant", "quant_rows_fast_k")
+def t_quant_rows_fast(ctx: Ctx):
+    rows, k, g = 32, 512, 128
+    rng = np.random.default_rng(70)
+    x = rng.standard_normal((rows, k)).astype(np.float32)
+    qref, scref = quant_rows_ref(x, k, g)
+    ng = k // g
+    pq = ctx.out(rows * k // 8, np.uint32)
+    psc = ctx.out(ng * rows)
+    px = ctx.buf(x)
+    ctx.launch("quant_rows_fast_k", rows, 256,
+               [pq, psc, px, k, g, rows, k, 0, ng])
+    q = ctx.get(pq, rows * k // 8, np.uint32).reshape(rows, k // 8)
+    sc = ctx.get(psc, ng * rows).reshape(ng, rows)
+    # 量化是整数/位运算，要求**逐位一致**
+    err = 0.0 if np.array_equal(q, qref) and np.array_equal(sc, scref) else 1.0
+    return judge(err, np.zeros(1), atol=0.0, rtol=0.0)
+
+
+@case("quant", "quant_act4")
+def t_quant_act4(ctx: Ctx):
+    k = 5120
+    rng = np.random.default_rng(71)
+    x = rng.standard_normal((1, k)).astype(np.float32)
+    qref, sref = quant_act4_ref(x)
+    paq = ctx.out(k // 2, np.uint8)
+    pasc = ctx.out(k // 32)
+    ctx.launch("quant_act4", k // 32, 32, [ctx.buf(x), paq, pasc, 1, k])
+    got_q = ctx.get(paq, k // 2, np.uint8)
+    got_s = ctx.get(pasc, k // 32)
+    ref_q = pack_int4_lo(qref).view(np.uint8).reshape(-1)
+    ok = bool(np.array_equal(got_q, ref_q)) and bool(
+        np.array_equal(got_s.view(np.uint32), sref.reshape(-1).view(np.uint32)))
+    return judge(0.0 if ok else 1.0, np.zeros(1), atol=0.0, rtol=0.0)
+
+
+@case("quant", "quant_act")
+def t_quant_act(ctx: Ctx):
+    k = 5120
+    rng = np.random.default_rng(72)
+    x = rng.standard_normal((1, k)).astype(np.float32)
+    qref, sref = quant_act_ref(x)
+    pae = ctx.out(k // 2, np.int8)
+    pao = ctx.out(k // 2, np.int8)
+    pasc = ctx.out(k // 128)
+    pasu = ctx.out(k // 128, np.int32)
+    ctx.launch("quant_act", k // 128, 32, [ctx.buf(x), pae, pao, pasc, pasu, 1, k])
+    sum_ref = qref.reshape(1, k // 128, 128).sum(axis=2).astype(np.int32)
+    ok = (np.array_equal(ctx.get(pae, k // 2, np.int8), qref[0, 0::2].astype(np.int8))
+          and np.array_equal(ctx.get(pao, k // 2, np.int8), qref[0, 1::2].astype(np.int8))
+          and np.array_equal(ctx.get(pasc, k // 128).view(np.uint32),
+                             sref.reshape(-1).view(np.uint32))
+          and np.array_equal(ctx.get(pasu, k // 128, np.int32), sum_ref.reshape(-1)))
+    return judge(0.0 if ok else 1.0, np.zeros(1), atol=0.0, rtol=0.0)
+
+
+# ---------------------------------------------------------------------------
 # 运行器
 # ---------------------------------------------------------------------------
 def main() -> int:

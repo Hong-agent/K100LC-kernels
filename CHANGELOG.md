@@ -52,10 +52,12 @@
 - 自检新增 **w4** 组：W4A4（M=1/M=4/双行）与 W4A8 的「激活量化 + GEMV」
   全对账，参考实现直接按 `kernels/gemv_w4a4_core.h` / `gemv_w4a8_core.h`
   的公式写（组内精确 int32 点积、再乘子组尺度）。这条通路此前**零覆盖**。
+- 自检新增 **quant** 组：`quant_rows_fast_k`、`quant_act4`、`quant_act`
+  三个激活量化内核与主机参考**逐位一致**（码字与尺度都要求 bit-exact）。
 
 ### 验证
 
-- `python3 tools/selftest_all.py`：50 个用例全部通过。
+- `python3 tools/selftest_all.py`：53 个用例全部通过。
 - `python3 tools/bench_decode.py --n 17408 --k 5120 --iters 60`（实测，含激活量化）：
 
 | 通路 | us/层 | GB/s | 峰值占比 |
