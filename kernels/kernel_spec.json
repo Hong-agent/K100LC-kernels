@@ -2555,30 +2555,30 @@
   "asm": "k_new/024__Z11scale_mul_kPffx.s"
  },
  {
-  "name": "_Z11split_qkv_kPfS_S_PKfiiii",
+  "name": "split_qkv_k",
   "args": [
    {
-    ".address_space": "global",
     ".offset": 0,
     ".size": 8,
+    ".address_space": "global",
     ".value_kind": "global_buffer"
    },
    {
-    ".address_space": "global",
     ".offset": 8,
     ".size": 8,
+    ".address_space": "global",
     ".value_kind": "global_buffer"
    },
    {
-    ".address_space": "global",
     ".offset": 16,
     ".size": 8,
+    ".address_space": "global",
     ".value_kind": "global_buffer"
    },
    {
-    ".address_space": "global",
     ".offset": 24,
     ".size": 8,
+    ".address_space": "global",
     ".value_kind": "global_buffer"
    },
    {
@@ -2647,36 +2647,36 @@
     ".value_kind": "hidden_remainder_z"
    },
    {
-    ".offset": 88,
+    ".offset": 72,
     ".size": 8,
     ".value_kind": "hidden_global_offset_x"
    },
    {
-    ".offset": 96,
+    ".offset": 80,
     ".size": 8,
     ".value_kind": "hidden_global_offset_y"
    },
    {
-    ".offset": 104,
+    ".offset": 88,
     ".size": 8,
     ".value_kind": "hidden_global_offset_z"
    },
    {
-    ".offset": 112,
+    ".offset": 96,
     ".size": 2,
     ".value_kind": "hidden_grid_dims"
    }
   ],
-  "kernarg_size": 304,
+  "kernarg_size": 104,
   "kernarg_align": 8,
-  "sgpr_count": 20,
-  "vgpr_count": 13,
+  "sgpr_count": 91,
+  "vgpr_count": 67,
   "group_segment": 0,
   "private_segment": 0,
   "rsrc1": 11468931,
   "rsrc2": 140,
   "props": 9,
-  "asm": "k_new/026__Z11split_qkv_kPfS_S_PKfiiii.s"
+  "asm": "k_new/split_qkv_k.s"
  },
  {
   "name": "_Z12quant_rows_kPjPfPKfiiiii",

@@ -10,11 +10,13 @@
     python3 tools/size_sweep.py          # 全部
     python3 tools/size_sweep.py --group norm
 
-**已探明的尺寸限制**（下面会跳过并在最后提示）：
+**历史上探明的尺寸坑**（现在都已修掉/澄清，扫描里都覆盖）：
 
-* `split_qkv_k`：每个 token 的行（`qn+kn+vn`）**不能超过 64 个元素**——
-  一个 lane 一个元素、没有行内循环；超出部分静默算错（实测 row=80 时最后
-  16 个错、row=144 时最后 80 个错，误差数恒为 `row-64`）。T 再大都没事。
+* `split_qkv_k`：旧版每个 token 的行（`qn+kn+vn`）**不能超过 64 个元素**
+  （一个 lane 一个元素、没有行内循环，超出静默算错）。v1.8.0 用编译器 DSL
+  重写了这个内核（加了行内并行循环），现在任意行宽都正确。
+* `concat2_k`：第 5 个参数是「半长」，输出要给 `2n`。
+* `vit_bias_s_kernel`：第 5 个参数只有等于 `dim` 时语义干净。
 """
 from __future__ import annotations
 
@@ -185,8 +187,9 @@ def g_moe_topk(s: Sweep, rng) -> None:
 
 def g_seq_vit(s: Sweep, rng) -> None:
     print("[序列 / 视觉塔]")
-    # 注意：split_qkv_k 的行必须 <= 64（见模块 docstring），这里只扫合规尺寸
-    for T, qn, kn, vn in ((1, 4, 2, 3), (5, 16, 8, 8), (3, 7, 1, 2), (8, 32, 16, 16)):
+    # v1.8.0 起 split_qkv_k 的行宽没有 64 的限制了（旧版有）
+    for T, qn, kn, vn in ((1, 4, 2, 3), (5, 16, 8, 8), (3, 7, 1, 2), (8, 32, 16, 16),
+                          (5, 64, 32, 48), (3, 200, 100, 257), (4, 1, 1, 1)):
         x = rng.standard_normal(T * (qn + kn + vn)).astype(np.float32)
         pq = s.buf(np.zeros(T * qn, np.float32))
         pk = s.buf(np.zeros(T * kn, np.float32))
@@ -197,7 +200,7 @@ def g_seq_vit(s: Sweep, rng) -> None:
         bad += int((s.get(pk, T * kn) != xt[:, qn:qn + kn].reshape(-1)).sum())
         bad += int((s.get(pv, T * vn) != xt[:, qn + kn:].reshape(-1)).sum())
         check(s, f"split_qkv T={T} qn={qn} kn={kn} vn={vn}", bad,
-              f"(row={qn + kn + vn} ≤ 64)")
+              f"(row={qn + kn + vn})")
     for dim in (64, 128, 512):
         rows = 3
         x = rng.standard_normal((rows, dim)).astype(np.float32)
@@ -249,7 +252,6 @@ def main() -> int:
         finally:
             s.free()
     print()
-    print("已知尺寸限制（有意跳过）：split_qkv_k 的行 qn+kn+vn 必须 ≤ 64")
     if FAILS:
         print(f"失败 {len(FAILS)} 项：")
         for f in FAILS:

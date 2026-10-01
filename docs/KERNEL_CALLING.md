@@ -639,8 +639,8 @@ rt.launch("nvfp4_gemv<1,1>", cdiv(n, 4), 256,
 
 ```python
 # QKV 切分：split_qkv_k(yq, yk, yv, x, T, qn, kn, vn)
-#   **限制：每个 token 的行 qn+kn+vn 必须 ≤ 64**（一个 lane 一个元素、没有
-#   行内循环；超出了不报错、只是静默算错——实测 row=80 时最后 16 个错）。
+#   行宽任意（v1.8.0 起内核由本仓库编译器生成，带行内并行循环）；旧版在
+#   qn+kn+vn > 64 时会静默算错，升级后不再有此限制。
 rt.launch("split_qkv_k", T, 64, [pq, pk, pv, px, T, qn, kn, vn])
 # KV 写入：kv_append_k_k / kv_append_v_k
 rt.launch("kv_append_k_k", grid, 64, pkv, pstate, px, ...)

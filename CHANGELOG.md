@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.8.0
+
+**用编译器重写一个已发货的内核**：`split_qkv_k` 不再有「行 ≤ 64」的限制。
+
+### 重写
+
+上一轮的尺寸扫描查出 `split_qkv_k`（LLVM 生成的旧版）在 `qn+kn+vn > 64` 时
+**静默算错**（一个 lane 一个元素、没有行内循环，误差数恒为 `row-64`）。
+这轮把它**用本仓库的 DSL 重写**、用本仓库的编译器编出来替换：
+
+```python
+def split_qkv_k(yq, yk, yv, x, T, qn, kn, vn):
+    t = bid()                       # 一个 workgroup 一个 token
+    if t < T:
+        ...
+        for i in range(0, (qn + 63) >> 6):      # 行内并行循环
+            c = lane() + (i << 6)
+            if c < qn:
+                yq[t * qn + c] = x[base + c]
+        # kn / vn 两段同理
+```
+
+同名同 ABI 替换（`kernels/asm/k_new/split_qkv_k.s` + spec 条目更新，旧的
+LLVM 版删除）。实测任意行宽都正确：row = 9/144/384/**557** 全对，
+`T=65` 也对。
+
+### 验证
+
+- `tools/size_sweep.py` 的 `split_qkv` 组扩到 row 到 557（原来因为已知限制
+  只扫 ≤ 64），全部通过；模块 docstring 里三条"历史尺寸坑"改成已修/已澄清。
+- `bash tools/check_all.sh` 全绿。
+
 ## 1.7.9
 
 系统性的**尺寸扫描**（新工具），并据此查出 `split_qkv_k` 的真实尺寸限制。

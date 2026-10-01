@@ -1116,9 +1116,9 @@ def t_split_qkv(ctx: Ctx):
     `q[t*qn+i] = x[t*row+i]`、`k[t*kn+i] = x[t*row+qn+i]`、
     `v[t*vn+i] = x[t*row+qn+kn+i]`；grid = T，wg = 64。
 
-    **限制：`qn+kn+vn` 必须 ≤ 64**（一个 lane 一个元素、没有行内循环）。
-    超出不报错、只是静默算错（实测 row=80 时最后 16 个元素错，误差数恒为
-    `row-64`）；`tools/size_sweep.py` 会打印这条已知限制。
+    v1.8.0 起这个内核是**用编译器 DSL 重写**的（加了行内并行循环），
+    任意行宽都正确；旧版（LLVM 生成的）在 `qn+kn+vn > 64` 时会静默算错
+    （误差数恒为 `row-64`）。`tools/size_sweep.py` 扫到 row=557。
     """
     T, qn, kn, vn = 5, 4, 2, 3
     rng = np.random.default_rng(80)

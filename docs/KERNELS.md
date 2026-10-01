@@ -142,7 +142,7 @@
 | `silu_mul_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:8` | 288 | 0 | 0 |
 | `softmax_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4` | 32 | 1024 | 0 |
 | `softmax_vec_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4` | 32 | 1024 | 0 |
-| `split_qkv_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4 val:44:4` | 304 | 0 | 0 |
+| `split_qkv_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4 val:44:4` | 104 | 0 | 0 |
 | `ssm_ab_gate_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 buf:56:8 val:64:4 val:68:4` | 328 | 64 | 0 |
 | `topk_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 0 | 0 |
 | `vit_attn_kernel` | `buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4 val:28:4 val:32:4` | 296 | 37888 | 304 |
@@ -3065,9 +3065,9 @@
 
 #### `split_qkv_k`
 
-- mangled 符号：`_Z11split_qkv_kPfS_S_PKfiiii`
-- 签名：`split_qkv_k(float*, float*, float*, float const*, int, int, int, int)`
-- kernarg：304 B，LDS：0 B，private：0 B
+- mangled 符号：`split_qkv_k`
+- 签名：`split_qkv_k`
+- kernarg：104 B，LDS：0 B，private：0 B
 
 | # | offset | size | kind | 由谁填 |
 |---:|---:|---:|---|---|
@@ -3088,10 +3088,10 @@
 | 14 | 66 | 2 | `hidden_remainder_x` | 运行时 |
 | 15 | 68 | 2 | `hidden_remainder_y` | 运行时 |
 | 16 | 70 | 2 | `hidden_remainder_z` | 运行时 |
-| 17 | 88 | 8 | `hidden_global_offset_x` | 运行时 |
-| 18 | 96 | 8 | `hidden_global_offset_y` | 运行时 |
-| 19 | 104 | 8 | `hidden_global_offset_z` | 运行时 |
-| 20 | 112 | 2 | `hidden_grid_dims` | 运行时 |
+| 17 | 72 | 8 | `hidden_global_offset_x` | 运行时 |
+| 18 | 80 | 8 | `hidden_global_offset_y` | 运行时 |
+| 19 | 88 | 8 | `hidden_global_offset_z` | 运行时 |
+| 20 | 96 | 2 | `hidden_grid_dims` | 运行时 |
 
 #### `ssm_ab_gate_k`
 
