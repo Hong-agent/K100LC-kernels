@@ -231,6 +231,26 @@ def main() -> int:
             report(f"{kernel}", b.time(run_g, iters), raw.nbytes)
             b.free()
 
+    # ---------------- NVFP4（E2M1 权重 + E4M3 块尺度，int8 激活） ----------------
+    if "nvfp4" in want:
+        print("[NVFP4 解码：nvfp4_gemv<A,1>]")
+        wq = np.ascontiguousarray(rng.integers(0, 1 << 32, size=n * (k // 8),
+                                               dtype=np.uint64).astype(np.uint32))
+        ws = np.ascontiguousarray(rng.integers(1, 0x7F, size=n * (k // 16),
+                                               dtype=np.uint8))
+        pq, pws = b.upload("nwq", wq), b.upload("nws", ws)
+        qa = b.upload("nqa", rng.integers(-127, 127, k, dtype=np.int8))
+        qb = b.upload("nqb", rng.integers(-127, 127, k, dtype=np.int8))
+        psc = b.upload("nsc", np.full(k // 16, 0.01, np.float32))
+        py = b.buf("ny", n * 4)
+        wbytes = wq.nbytes + ws.nbytes
+        for a_rows in (1, 2, 4):
+            def run_nv(a_rows=a_rows):
+                rt.launch(f"nvfp4_gemv<{a_rows},1>", (n + a_rows - 1) // a_rows, 256,
+                          [pq, pws, qa, qb, psc, py, n, k, 1.0])
+            report(f"nvfp4_gemv<{a_rows},1>", b.time(run_nv, iters), wbytes)
+        b.free()
+
     # ---------------- f32 参考路 ----------------
     if "f32" in want:
         nf = min(n, 4096)          # f32 权重太大，缩小 N 只做参考
