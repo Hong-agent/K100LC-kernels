@@ -273,6 +273,28 @@ def dsl(x: ptr[f32], y: ptr[f32], n: u32):
 """,
          np.array([0, 1, 2], np.float32),
          lambda a: (a * 8.0) + 2.0),
+        ("and（两个 varying 掩码合并）",
+         """
+def dsl(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        y[i] = 0.0
+        if x[i] > 0.0 and x[i] < 2.0:
+            y[i] = 1.0
+""",
+         np.array([-2, -1, 0, 0.5, 1, 2, 3], np.float32),
+         lambda a: np.where((a > 0) & (a < 2), 1.0, 0.0)),
+        ("or（uniform + varying 混合）",
+         """
+def dsl(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        y[i] = 0.0
+        if n > 4 and (x[i] < 0.0 or x[i] > 2.0):
+            y[i] = 1.0
+""",
+         np.array([-2, -1, 0, 0.5, 1, 2, 3], np.float32),
+         lambda a: np.where((a < 0) | (a > 2), 1.0, 0.0)),
     ]
     for title, src, x, ref_fn in cases:
         n = len(x)

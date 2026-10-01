@@ -398,6 +398,32 @@ class CodeGen:
             op = {ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=",
                   ast.Eq: "==", ast.NotEq: "!="}[type(node.ops[0])]
             return self.compare(op, a, b)
+        if isinstance(node, ast.BoolOp):
+            # 逻辑与/或。DSL 表达式没有副作用，所以**两边都求值**、把各自的掩码
+            # 在 vcc 里按位合并（不是短路求值，但结果一样）。
+            # 每个比较都会写 vcc，所以合并前先把当前掩码存进一对 SGPR。
+            if not isinstance(node.op, (ast.And, ast.Or)):
+                raise CompileError("只支持 and / or")
+            mn = "s_and_b64" if isinstance(node.op, ast.And) else "s_or_b64"
+            acc = self._alloc_tmp_s(2)
+            first = True
+            for sub in node.values:
+                v = self.expr(sub)
+                if v.kind == "vpred":
+                    pass                       # 掩码已经在 vcc 里
+                elif v.kind == "spred":
+                    # 标量条件在 SCC 里，展成 64 位掩码再合并
+                    self.emit("s_cselect_b64 vcc, -1, 0")
+                else:
+                    raise CompileError("and/or 的操作数必须是比较结果")
+                if first:
+                    self.emit(f"s_mov_b64 s[{acc}:{acc + 1}], vcc")
+                    first = False
+                else:
+                    self.emit(f"{mn} vcc, vcc, s[{acc}:{acc + 1}]")
+                    self.emit(f"s_mov_b64 s[{acc}:{acc + 1}], vcc")
+            self.emit(f"s_mov_b64 vcc, s[{acc}:{acc + 1}]")
+            return Val("vpred", None, "bool")
         if isinstance(node, ast.Subscript):
             return self.load(node)
         if isinstance(node, ast.Call):
