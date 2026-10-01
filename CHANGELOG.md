@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.9.9
+
+**把「每次 dispatch ~7 us」这件事查到底了：是硬件 retire 速率，改不动。**
+v1.9.8 只是量到这 ~7 us 和 grid / workgroup 无关；这一版加了引擎侧的分段计时
+（`RT_HSART_PROF=1`，打在 `hsart_launch_batch` 里），把 7.3 us 拆开：
+
+| 段 | 每条 |
+| --- | --- |
+| 等「同一个 kernarg 槽的上一次完成」（`hsa_signal_wait`） | ~6.4~10 us（只有当批数超过槽数、主机被迫等 GPU 时才出现） |
+| 填包（memcpy kernarg + 建 dispatch 包） | 0.3~0.9 us |
+| 敲门铃 | 摊到每条 ~0.03 us |
+
+然后逐项排除：
+
+* **不是完成信号本身**：把「段内每条 dispatch 都挂完成信号」改成「只挂段尾一条」
+  （诊断开关量了两版），每条 4.96 vs 4.87 us——一样。
+* **不是槽数**：`N_SLOT` 64 → 1024 重复量 6 次都是 7.3 us（一次 4.9 的读数是
+  假象，复测不成立）。
+* **不是队列类型**：`HSA_QUEUE_TYPE_SINGLE` vs `MULTI` 都是 7.05/7.07 us。
+* **不受 grid / workgroup 影响**：空活内核 grid 1→1024、workgroup 64→256
+  全是 7.1~7.4 us。
+
+结论：**这块卡 retire 一条 dispatch 要 ~7.3 us（≈137k 条/秒）**，主机侧填包
+其实很便宜（不到 1 us）。所以模型路径的瓶颈就是「一层发了几个内核」——一层
+decoder 10 个 dispatch ≈ 73 us，占整层 ~0.21 ms/token 的三分之一。这也把
+B4 融合的账算实了：**每融合掉一个内核 ≈ 整层快 3.5%**。
+
+（`RT_HSART_PROF` 留在引擎里，以后怀疑投递路径时直接 `RT_HSART_PROF=1` 跑。）
+
+顺带把一层 decoder 的干净基准做成可复现的一条命令 `tools/bench_layer.py`：
+批量重放、最后一个 token 才 sync，dim=512/8 头/ffn=1024 实测
+**0.207~0.211 ms/token**（首个 token ~0.32 ms，含录 plan 的开销）。
+
 ## 1.9.8
 
 **`flash_dec_part_k` 的 d / j 批量从 4 加宽到 8。** 1.9.7 把账拆开之后知道：

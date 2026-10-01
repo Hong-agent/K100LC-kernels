@@ -19,6 +19,8 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cstdlib>
+#include <ctime>
 #include <unordered_map>
 #include <mutex>
 #include <string>
@@ -42,7 +44,24 @@ struct StreamImpl { int dummy = 0; };
 
 namespace {
 
+// kernarg 槽数 / 队列深度。投递路径的门槛在**硬件**：这批内核每条要 ~7.3 us
+// 才 retire（v1.9.9 量过：把槽加到 1024、把每条的完成信号去掉、换队列类型，
+// 都不动它）。所以这里维持 64 就好——加大只多占 pinned 内存。
+// 注意 `make_queue` 里 `qsize = min(设备上限, N_SLOT)`：只有两者相等时
+// 「槽号 == 环上位置」这个前提才成立，改一个就得改另一个。
 constexpr int N_SLOT = 64;
+
+// 诊断用：`RT_HSART_PROF=1` 时把批量投递的内部分段耗时打到 stderr。
+// （一度以为「每次 dispatch 要 7 us」是 GPU 的固定开销，量下来其实是
+// 主机侧 `hsart_launch_batch` 里每条记录的填包/等待，见 CHANGELOG 1.9.9。）
+double now_us() {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3;
+}
+const bool g_prof = getenv("RT_HSART_PROF") != nullptr;
+double g_pf_wait_us = 0, g_pf_fill_us = 0, g_pub_us = 0;
+long   g_pf_wait_n = 0;
 
 hsa_agent_t g_gpu{};
 std::vector<hsa_agent_t> g_cpus;
@@ -523,9 +542,11 @@ static bool packet_fill(uint64_t kobj, const char* dbg_name, uint32_t grid_wg,
         return false;
     }
     const int slot = g_next;
+    const double t_ent = g_prof ? now_us() : 0;
     if (g_slot_used[slot])
         hsa_signal_wait_scacquire(g_sig[slot], HSA_SIGNAL_CONDITION_LT, 1, UINT64_MAX,
                                   HSA_WAIT_STATE_ACTIVE);
+    const double t_w = g_prof ? now_us() : 0;
     char* ka = (char*)g_karg[slot];
     memcpy(ka, kernarg, kernarg_size);
     const uint64_t gx = (uint64_t)grid_wg * wg;
@@ -569,6 +590,11 @@ static bool packet_fill(uint64_t kobj, const char* dbg_name, uint32_t grid_wg,
     g_slot_used[slot] = true;
     g_next = (g_next + 1) % N_SLOT;
     if (g_pending < N_SLOT) g_pending++;
+    if (g_prof) {
+        g_pf_wait_us += t_w - t_ent;
+        g_pf_fill_us += now_us() - t_w;
+        g_pf_wait_n++;
+    }
     return true;
 }
 
@@ -592,6 +618,9 @@ int hsart_kernel_id(const char* name) {
 
 int hsart_launch_batch(const uint64_t* plan, int nrec) {
     std::lock_guard<std::mutex> lk(g_mtx);
+    const double t0p = g_prof ? now_us() : 0;
+    g_pf_wait_us = g_pf_fill_us = g_pub_us = 0;
+    g_pf_wait_n = 0;
     uint64_t widx = hsa_queue_load_write_index_relaxed(g_queue);
     int done = 0;
     int chunk = 0;
@@ -630,11 +659,24 @@ int hsart_launch_batch(const uint64_t* plan, int nrec) {
         // `packet_fill` 会去等「同一个槽的上一次」——而那次还在**本批**里、
         // 门铃没敲、GPU 根本看不到它 → 死锁（v1.9.7 之前一次投 >64 条就挂住）。
         if (++chunk >= N_SLOT) {
+            const double tp = g_prof ? now_us() : 0;
             packet_publish(widx);
+            if (g_prof) g_pub_us += now_us() - tp;
             chunk = 0;
         }
     }
-    if (chunk > 0) packet_publish(widx);   // 不满一段的尾巴
+    if (chunk > 0) {                       // 不满一段的尾巴
+        const double tp = g_prof ? now_us() : 0;
+        packet_publish(widx);
+        if (g_prof) g_pub_us += now_us() - tp;
+    }
+    if (g_prof && nrec > 0) {
+        const double tot = now_us() - t0p;
+        fprintf(stderr, "hsa_rt: batch %d 条: 总 %.1f us = 等槽 %.1f (%.2f/条, %ld 次)"
+                        " + 填包 %.1f (%.2f/条) + 敲门铃 %.1f\n",
+                nrec, tot, g_pf_wait_us, g_pf_wait_us / nrec, g_pf_wait_n,
+                g_pf_fill_us, g_pf_fill_us / nrec, g_pub_us);
+    }
     return done;
 }
 

@@ -156,6 +156,7 @@ MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简�
 | `tools/size_sweep.py` | **尺寸扫描**：把对过账的内核换一批尺寸再跑一遍（这张卡上出过两次尺寸相关的坑）。已查出的限制：`split_qkv_k` 行必须 ≤ 64 |
 | `tools/bench_decode.py` | 解码（M=1..4）每条权重通路的 us/层 与 GB/s |
 | `tools/bench_flash_decode.py` | 解码注意力的分项耗时：`--what forward\|part\|comb`，按 `n_kv`/`nsplit` 扫长上下文缩放 |
+| `tools/bench_layer.py` | 一整层 decoder 的端到端吞吐（设备侧串联、最后一个 token 才 sync，不下载） |
 | `tools/bench_model_paths.py` | f32 / W4A16 / W4A8 / W4A4 / 预填充 GEMM 五路对比 |
 | `tools/bench_moe.py` | 稠密全专家 vs 分桶 |
 
