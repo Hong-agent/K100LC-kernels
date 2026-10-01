@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import struct
 import sys
@@ -990,8 +991,72 @@ def t_nvfp4_gemv_all(ctx: Ctx):
 
 
 # ---------------------------------------------------------------------------
-# J. 序列 / 卷积 / 视觉塔的小算子
+# J. 视觉塔（ViT）里的小算子 + 序列小算子
 # ---------------------------------------------------------------------------
+@case("vit", "vit_bias_kernel")
+def t_vit_bias(ctx: Ctx):
+    """`y[i] += b[i % dim]`（累加，不是覆盖）。参数 `(y, b, n, dim)`。"""
+    n, dim = 128, 8
+    rng = np.random.default_rng(110)
+    y0 = rng.standard_normal(n).astype(np.float32)
+    b = rng.standard_normal(dim).astype(np.float32)
+    py = ctx.buf(y0.copy())
+    ctx.launch("vit_bias_kernel", (n + 63) // 64, 64, [py, ctx.buf(b), n, dim])
+    ref = y0 + b[np.arange(n) % dim]
+    return judge(np.abs(ctx.get(py, n) - ref).max(), ref)
+
+
+@case("vit", "vit_bias_s_kernel")
+def t_vit_bias_s(ctx: Ctx):
+    """`y[i] += b[i % period]`；参数 `(y, b, n, dim, period)`。
+
+    **只在 `period == dim` 时可靠**：实测 `dim=16, n=256`、period 取
+    2/4/8 时分别从下标 24/48/96 起开始算错（`i % period` 用的是范围有限的
+    魔法除法），period=3/5 同样错、period=16（=dim）全对。所以用例只覆盖
+    `period == dim` 这个可靠用法，缺陷记在 ROADMAP。
+    """
+    n, dim, period = 512, 64, 64
+    rng = np.random.default_rng(111)
+    y0 = rng.standard_normal(n).astype(np.float32)
+    b = rng.standard_normal(dim).astype(np.float32)
+    py = ctx.buf(y0.copy())
+    ctx.launch("vit_bias_s_kernel", (n + 255) // 256, 256,
+               [py, ctx.buf(b), n, dim, period])
+    ref = y0 + b[np.arange(n) % period]
+    return judge(np.abs(ctx.get(py, n) - ref).max(), ref)
+
+
+@case("vit", "vit_gelu_kernel")
+def t_vit_gelu(ctx: Ctx):
+    """**精确 erf 形式**的 GELU（不是 tanh 近似）：实测与 erf 差 2e-8、
+    与 tanh 近似差 4e-4，足以区分。参数 `(y, x, n, workgroup)`。"""
+    n = 256
+    x = np.linspace(-6, 6, n, dtype=np.float32)
+    py = ctx.out(n)
+    ctx.launch("vit_gelu_kernel", (n + 63) // 64, 64, [py, ctx.buf(x), n, 64])
+    erf = np.vectorize(math.erf)
+    ref = (0.5 * x * (1.0 + erf(x / math.sqrt(2.0)))).astype(np.float32)
+    return judge(np.abs(ctx.get(py, n) - ref).max(), ref, atol=1e-6, rtol=1e-6)
+
+
+@case("vit", "vit_ln_kernel")
+def t_vit_ln(ctx: Ctx):
+    """标准 LayerNorm；**grid = rows、wg = 64**（与 `layernorm_k` 同约定）。
+    参数 `(y, x, w, b, rows, dim, eps)`。"""
+    rows, dim = 8, 128
+    rng = np.random.default_rng(112)
+    x = rng.standard_normal((rows, dim)).astype(np.float32)
+    w = rng.standard_normal(dim).astype(np.float32)
+    b = rng.standard_normal(dim).astype(np.float32)
+    eps = 1e-5
+    py = ctx.out(rows * dim)
+    ctx.launch("vit_ln_kernel", rows, 64,
+               [py, ctx.buf(x), ctx.buf(w), ctx.buf(b), rows, dim, np.float32(eps)])
+    ref = (x - x.mean(axis=1, keepdims=True)) / np.sqrt(
+        x.var(axis=1, keepdims=True) + eps) * w + b
+    return judge(np.abs(ctx.get(py, rows * dim).reshape(rows, dim) - ref).max(), ref)
+
+
 @case("seq", "split_qkv_k")
 def t_split_qkv(ctx: Ctx):
     """把一个 token 的 `[qn + kn + vn]` 行拆成 q / k / v 三段。
