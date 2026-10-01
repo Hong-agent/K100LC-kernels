@@ -114,9 +114,11 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
 `k100lc_kernels.model` 提供可直接组合的推理算子：`F32Linear` /
 `DotLinear`（INT4、GGUF 11 类编码）/ `Int4Linear`（W4A16 / W4A8 / W4A4）/
 `RT4Linear` / `RMSNorm` / `SwiGLU` / `MLP` / `MoECombine` / `MoEExperts` /
-`KVCache` / `Attention`（解码注意力，用已对账的内核拼）/ `Sampler` /
-`run_sequence`。权重上传一次、工作缓冲复用、整段
-前向只 sync 一次；启动开销从约 10 us 降到约 7 us。
+`KVCache` / `Attention`（单头解码注意力）/ `FlashAttention`（**多头**，
+一次前向 2 个 launch）/ `RoPE` / `Sampler` / `run_sequence`，以及把整条链串起来
+的 **`TransformerLayer`**（RMSNorm → QKV → RoPE → 融合多头注意力 → 输出投影 →
+残差 → RMSNorm → SwiGLU → 残差；整层设备侧串联、逐 token 一次 `sync`，
+dim=512/8 头/ffn=1024 实测 **0.31 ms/token**，对账 1.9e-07）。
 
 ```bash
 python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024

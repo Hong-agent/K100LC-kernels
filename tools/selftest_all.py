@@ -1221,7 +1221,7 @@ def t_rope_apply(ctx: Ctx):
     sin = rng.standard_normal((rows, half)).astype(np.float32)
     py = ctx.out(rows * dim)
     ctx.launch("rope_apply_k", rows, 64,
-               [py, ctx.buf(x), ctx.buf(cos), ctx.buf(sin), rows, dim])
+               [py, ctx.buf(x), ctx.buf(cos), ctx.buf(sin), rows, dim, 0, 0])
     a, b = x[:, :half], x[:, half:]
     ref = np.concatenate([a * cos - b * sin, a * sin + b * cos],
                          axis=1).astype(np.float32)

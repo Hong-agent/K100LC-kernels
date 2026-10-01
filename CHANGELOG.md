@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.8.9
+
+**一整层 decoder 跑通了**：新增 `TransformerLayer`（RMSNorm → QKV → RoPE → 追加
+KV → 融合多头注意力 → 输出投影 → 残差 → RMSNorm → SwiGLU → 残差），**全程设备侧
+串联、逐 token 一次 `sync`**；实测 dim=512 / 8 头 × 64 / ffn=1024 为
+**0.31 ms/token**，逐 token 与 NumPy 参考对账 **1.9e-07**。
+
+### 这轮改了什么
+
+1. **RoPE 内核加 `tsh` / `tbase`**（`rope_apply_k` 签名从 6 个参数变 8 个）：
+   表行 = `(row >> tsh) + tbase`。于是「一个 token 的所有头」可以**一次**做完
+   （q/k 按 `[n_heads, head_dim]` 摆、`rows=n_heads`、`tsh=log2(n_heads)`、
+   `tbase=位置`，所有头共用一行表），prefill 的多行也照旧（`tsh=0`）。
+   不这么做每个头要单独发一次，8 个头就是 16 次 launch。
+2. **`TransformerLayer`**（`k100lc_kernels.model`）：
+   * 权重按「拼块」摆：QKV 三个投影拼成 `[3*dim, dim]`、gate/up 拼成
+     `[2*ffn, dim]`，于是每层各只要 1 次 GEMV（不是 3 次 / 2 次）；
+   * 注意力用 `FlashAttention`（2 次 launch），KV 追加用 `vt_scatter_k` +
+     `copy_dev`；
+   * 全程 `sync=False` 入队，token 边界才 `sync`。
+3. 示例 `examples/python_model_layer.py` 新增 `run_transformer_layer`：与 NumPy
+   参考（自己维护 KV 缓存）**逐 token** 对账，`check_all.sh` 会跑它。
+
+### 实测与瓶颈
+
+| | 数值 |
+|---|---|
+| 设备侧连续 30 token（一次 sync） | **0.31 ms/token** |
+| numpy 进 / numpy 出（含上传下载） | 0.97 ms/token |
+| 逐 token 与 NumPy 参考最大相对误差 | 1.9e-07（12 token，缓存增长中） |
+| 一个 token 的 launch 数 | **16** |
+| 一层权重量（dim=512/ffn=1024，f32） | 10 MB → 约 17 us @600 GB/s |
+
+也就是说 0.31 ms 里**大头是启动次数**：相邻 launch 之间有依赖，实测每次约
+19 us 的串行延迟（16 × 19 ≈ 0.3 ms），而算力部分只有 ~20-30 us。下一步的
+优化方向明确记进 ROADMAP B4：融 RMSNorm+量化、qkv+rope、追加 KV+rope、
+注意力+输出投影、SwiGLU+down。
+
+### 验证
+
+* 示例里的 `run_transformer_layer`（8 个 token 逐 token 对账，max_rel 2.2e-07）
+  进入 `tools/check_all.sh` 的模型级端到端。
+* RoPE 内核改签名后，`selftest_all.py`（含新的 8 参数调用）、`size_sweep.py`、
+  编译器回归 `check_rope`、`RoPE.forward_device` 全部同步更新并通过；
+  额外验证了「多头共用一行表」的语义（4 头 × dh=64、表行 = 位置，逐位相同）。
+* `bash tools/check_all.sh` 全绿。
+
 ## 1.8.8
 
 **融合的多头解码注意力**：`flash_dec_part_k` + `flash_dec_comb_k` —— 不管几个头，

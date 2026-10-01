@@ -41,7 +41,7 @@ __all__ = [
     "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
     "RMSNorm", "SwiGLU", "MLP", "MoECombine", "MoEExperts", "RoPE",
     "KVCache", "Sampler",
-    "Attention", "FlashAttention",
+    "Attention", "FlashAttention", "TransformerLayer",
     "run_sequence", "gemv_f32", "ROWS8_MAX_K", "SPLIT_SOFTMAX_MIN_PAD",
     "SPLITK_VTP",
 ]
@@ -1054,6 +1054,111 @@ class FlashAttention:
         return self.rt.download(out, self.dim, np.float32)
 
 
+class TransformerLayer:
+    """一层 decoder 的**解码路径**，整层设备侧串联，逐 token 一次 `sync`：
+
+        h = x
+        h += W_o · Attention(RoPE(W_qkv·RMSNorm(h)))      # 多头 + KV 缓存
+        h += W_down · (silu(gate) * up)                    # 门控 MLP
+
+    设计要点：
+
+    * **权重拼成整块**：QKV 三个投影拼成 `[3*dim, dim]`、gate/up 拼成
+      `[2*ffn, dim]`，于是每层各只要 1 次 GEMV（而不是 3 次 / 2 次）。
+    * **RoPE 一次处理所有头**：q/k 按 `[n_heads, head_dim]` 摆，`rows = n_heads`、
+      `tsh = log2(n_heads)`、`tbase = 位置`，所有头共用同一行表。
+    * 注意力用融合的 `FlashAttention`（2 个 launch），K/V 追加 2 次（转置 + 拷贝）。
+    * 全程 `sync=False` 入队，最后一次 `sync` —— 实测一次 launch 固定开销约 11 us，
+      逐算子 sync 会把 CPU/GPU 串起来。
+
+    ```python
+    layer = TransformerLayer(rt, dim=512, n_heads=8, head_dim=64, ffn=2048,
+                             max_len=4096, w_qkv=..., w_o=..., w_gate_up=...,
+                             w_down=..., w_norm1=..., w_norm2=...)
+    for pos, tok in enumerate(tokens):
+        h = layer.forward(tok, pos=pos)      # 一次 sync
+    ```
+    """
+
+    def __init__(self, rt: Runtime, dim: int, n_heads: int, head_dim: int,
+                 ffn: int, max_len: int, w_qkv, w_o, w_gate_up, w_down,
+                 w_norm1, w_norm2, eps: float = 1e-6,
+                 ws: Workspace | None = None, tag: str = "layer"):
+        n_heads, head_dim, ffn = int(n_heads), int(head_dim), int(ffn)
+        if head_dim % 64:
+            raise ValueError("head_dim 必须是 64 的倍数（融合注意力内核）")
+        if n_heads & (n_heads - 1) or n_heads < 1:
+            raise ValueError("n_heads 必须是 2 的幂（RoPE 的 tsh）")
+        if int(dim) != n_heads * head_dim:
+            raise ValueError(f"dim({dim}) 必须等于 n_heads*head_dim"
+                             f"({n_heads * head_dim})")
+        self.rt = rt
+        self.dim, self.n_heads, self.head_dim = int(dim), n_heads, head_dim
+        self.ffn, self.max_len = ffn, int(max_len)
+        self.tag = tag
+        self._own_ws = ws is None
+        self.ws = ws or Workspace(rt)
+        ws = self.ws
+        self.norm1 = RMSNorm(rt, dim, w_norm1, eps, ws, tag + ".n1")
+        self.qkv = F32Linear(rt, 3 * dim, dim, w_qkv, ws, tag + ".qkv")
+        self.rope = RoPE(rt, head_dim, max_len, ws=ws, tag=tag + ".rope")
+        self.attn = FlashAttention(rt, n_heads, head_dim, max_len, ws=ws,
+                                   tag=tag + ".attn")
+        self.o = F32Linear(rt, dim, dim, w_o, ws, tag + ".o")
+        self.norm2 = RMSNorm(rt, dim, w_norm2, eps, ws, tag + ".n2")
+        self.gate_up = F32Linear(rt, 2 * ffn, dim, w_gate_up, ws, tag + ".gu")
+        self.act = SwiGLU(rt, ws, tag + ".act")
+        self.down = F32Linear(rt, dim, ffn, w_down, ws, tag + ".down")
+        self.h = ws.buffer(tag + ".h", dim * 4)
+        self.q = ws.buffer(tag + ".q", dim * 4)
+        self.k = ws.buffer(tag + ".k", dim * 4)
+        self.acc = ws.buffer(tag + ".act", max(ffn, dim) * 4)
+        self.tsh = n_heads.bit_length() - 1
+        self.length = 0
+
+    def reset(self) -> None:
+        self.attn.reset()
+        self.length = 0
+
+    def forward_device(self, x_dev: int, pos: int, sync: bool = False) -> int:
+        """跑一个 token：`x_dev` 是 `[dim]`，返回残差流 `h` 的设备指针。"""
+        rt, ws = self.rt, self.ws
+        if self.length >= self.max_len:
+            raise ValueError("KV 缓存满")
+        rt.copy_dev(self.h, int(x_dev), self.dim * 4)
+        n1 = self.norm1.forward_device(self.h, 1, sync=False)
+        qkv = self.qkv.forward_device(n1, 1, sync=False)
+        q = self.rope.forward_device(qkv, self.n_heads, pos=pos,
+                                     out_dev=self.q, tsh=self.tsh)
+        k = self.rope.forward_device(qkv + self.dim * 4, self.n_heads, pos=pos,
+                                     out_dev=self.k, tsh=self.tsh)
+        self.attn.append_device(k, qkv + 2 * self.dim * 4, 1)
+        self.length += 1
+        attn = self.attn.forward_device(q)
+        o = self.o.forward_device(attn, 1, sync=False)
+        rt.launch("add_inplace_k", cdiv(self.dim, 64), 64,
+                  [self.h, o, self.dim])
+        n2 = self.norm2.forward_device(self.h, 1, sync=False)
+        gu = self.gate_up.forward_device(n2, 1, sync=False)
+        act = self.act.forward_device(gu, gu + self.ffn * 4, self.ffn,
+                                      out_dev=self.acc)
+        d = self.down.forward_device(act, 1, sync=False)
+        rt.launch("add_inplace_k", cdiv(self.dim, 64), 64,
+                  [self.h, d, self.dim])
+        if sync:
+            rt.sync()
+        return self.h
+
+    def forward(self, x: np.ndarray, pos: int, sync: bool = True):
+        x = np.ascontiguousarray(x, dtype=np.float32).reshape(-1)
+        px = self.ws.buffer(self.tag + ".x", self.dim * 4)
+        self.rt.upload(px, x)
+        h = self.forward_device(px, pos, sync=sync)
+        if not sync:
+            return h
+        return self.rt.download(h, self.dim, np.float32)
+
+
 class RoPE:
     """旋转位置编码（RoPE，**rotate-half** 约定）：`rope_apply_k` 的运行时封装。
 
@@ -1107,16 +1212,19 @@ class RoPE:
         return p
 
     def forward_device(self, x_dev: int, rows: int, pos: int = 0,
-                       sync: bool = False, out_dev: int | None = None) -> int:
+                       sync: bool = False, out_dev: int | None = None,
+                       tsh: int = 0) -> int:
+        """`tsh`：给同一个 token 的多个头做 RoPE 时，x 按 `[n_heads, head_dim]`
+        摆、`rows = n_heads`、`tsh = log2(n_heads)`，所有头共用一行表。"""
         rows, pos = int(rows), int(pos)
         if rows <= 0 or pos < 0 or pos + rows > self.max_len:
             raise ValueError(f"RoPE 位置越界：pos={pos} rows={rows} "
                              f"max_len={self.max_len}")
         y = int(out_dev) if out_dev is not None else self._out(rows)
-        off = pos * self.half * 4
+        # tbase=pos：表行 = 当前位置；tsh：一行表供 2^tsh 个「头」共用
         self.rt.launch("rope_apply_k", rows, 64,
-                       [y, int(x_dev), self.cos + off, self.sin + off,
-                        rows, self.dim])
+                       [y, int(x_dev), self.cos, self.sin, rows, self.dim,
+                        int(tsh), pos])
         if sync:
             self.rt.sync()
         return y

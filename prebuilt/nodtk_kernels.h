@@ -2252,19 +2252,21 @@ static const RtArg k_args_128[] = {
     {24u, 8u, 0},   // by_value/global
     {32u, 4u, 0},   // by_value/global
     {36u, 4u, 0},   // by_value/global
-    {40u, 4u, 1},   // hidden_block_count_x
-    {44u, 4u, 2},   // hidden_block_count_y
-    {48u, 4u, 3},   // hidden_block_count_z
-    {52u, 2u, 4},   // hidden_group_size_x
-    {54u, 2u, 5},   // hidden_group_size_y
-    {56u, 2u, 6},   // hidden_group_size_z
-    {58u, 2u, 7},   // hidden_remainder_x
-    {60u, 2u, 8},   // hidden_remainder_y
-    {62u, 2u, 9},   // hidden_remainder_z
-    {64u, 8u, 10},   // hidden_global_offset_x
-    {72u, 8u, 11},   // hidden_global_offset_y
-    {80u, 8u, 12},   // hidden_global_offset_z
-    {88u, 2u, 13},   // hidden_grid_dims
+    {40u, 4u, 0},   // by_value/global
+    {44u, 4u, 0},   // by_value/global
+    {48u, 4u, 1},   // hidden_block_count_x
+    {52u, 4u, 2},   // hidden_block_count_y
+    {56u, 4u, 3},   // hidden_block_count_z
+    {60u, 2u, 4},   // hidden_group_size_x
+    {62u, 2u, 5},   // hidden_group_size_y
+    {64u, 2u, 6},   // hidden_group_size_z
+    {66u, 2u, 7},   // hidden_remainder_x
+    {68u, 2u, 8},   // hidden_remainder_y
+    {70u, 2u, 9},   // hidden_remainder_z
+    {72u, 8u, 10},   // hidden_global_offset_x
+    {80u, 8u, 11},   // hidden_global_offset_y
+    {88u, 8u, 12},   // hidden_global_offset_z
+    {96u, 2u, 13},   // hidden_grid_dims
 };
 
 static const RtArg k_args_129[] = {
@@ -2477,7 +2479,7 @@ static const RtKernel k_table[] = {
     {"reduce_blocks_k", "reduce_blocks_k", 4u, k_args_125, 24u, 0u, 0u},
     {"reduce_max1_k", "reduce_max1_k", 3u, k_args_126, 24u, 256u, 0u},
     {"reduce_sum1_k", "reduce_sum1_k", 3u, k_args_127, 24u, 256u, 0u},
-    {"rope_apply_k", "rope_apply_k", 19u, k_args_128, 96u, 0u, 0u},
+    {"rope_apply_k", "rope_apply_k", 21u, k_args_128, 104u, 0u, 0u},
     {"router_top10_k", "router_top10_k", 5u, k_args_129, 32u, 0u, 0u},
     {"softmax_k", "softmax_k", 5u, k_args_130, 32u, 1024u, 0u},
     {"softmax_vec_k", "softmax_vec_k", 5u, k_args_131, 32u, 1024u, 0u},

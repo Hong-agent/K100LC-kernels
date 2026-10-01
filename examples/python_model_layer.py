@@ -26,8 +26,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, MLP, MoECombine,  # noqa: E402
                             Attention, FlashAttention, MoEExperts, RMSNorm, RoPE,
-                            Runtime, Workspace, dequant_int4_group128,
-                            pack_int4_group128)
+                            Runtime, TransformerLayer, Workspace,
+                            dequant_int4_group128, pack_int4_group128)
 from iq_dequant import dequant_iq4_nl, dequant_q4_0_fast  # noqa: E402
 
 FAILURES: list[str] = []
@@ -263,6 +263,89 @@ def run_rope(rt: Runtime, dim: int, rng) -> None:
     rope.ws.free()
 
 
+def run_transformer_layer(rt: Runtime, rng) -> None:
+    """一整层 decoder（RMSNorm→QKV→RoPE→融合注意力→残差→RMSNorm→SwiGLU→残差）
+    跑 T 个 token，和 NumPy 参考（自己维护 KV 缓存）逐 token 对账 + 计时。
+
+    整层设备侧串联，**一个 token 一次 sync**；顺带报每 token 的 launch 数。
+    """
+    dim, n_heads, head_dim, ffn, max_len, eps = 512, 8, 64, 1024, 256, 1e-6
+    half = head_dim // 2
+
+    def mk(shape, scale=1.0):
+        return rng.standard_normal(shape).astype(np.float32) * scale
+
+    layer = TransformerLayer(
+        rt, dim=dim, n_heads=n_heads, head_dim=head_dim, ffn=ffn,
+        max_len=max_len, w_qkv=mk((3 * dim, dim), 0.02),
+        w_o=mk((dim, dim), 0.02), w_gate_up=mk((2 * ffn, dim), 0.02),
+        w_down=mk((dim, ffn), 0.02), w_norm1=mk(dim, 0.5) + 1.0,
+        w_norm2=mk(dim, 0.5) + 1.0, eps=eps, tag="tfl")
+
+    def rms(x, w):
+        return x / np.sqrt((x ** 2).mean() + eps) * w
+
+    theta = 10000.0 ** (-2.0 * np.arange(half) / head_dim)
+
+    def rope(v, pos):
+        c = np.cos(pos * theta).astype(np.float32)
+        s = np.sin(pos * theta).astype(np.float32)
+        a, b = v[:, :half], v[:, half:]
+        return np.concatenate([a * c - b * s, a * s + b * c], axis=1)
+
+    cache = {"k": [], "v": []}
+
+    def ref_layer(x, pos):
+        h = x.copy()
+        qkv = layer_w_qkv @ rms(h, layer_w_n1)
+        q = rope(qkv[:dim].reshape(n_heads, head_dim), pos)
+        k = rope(qkv[dim:2 * dim].reshape(n_heads, head_dim), pos)
+        v = qkv[2 * dim:].reshape(n_heads, head_dim)
+        cache["k"].append(k)
+        cache["v"].append(v)
+        K, V = np.stack(cache["k"]), np.stack(cache["v"])
+        out = np.zeros((n_heads, head_dim), np.float32)
+        for hh in range(n_heads):
+            s = (K[:, hh, :] @ q[hh]) / np.sqrt(head_dim)
+            p = np.exp(s - s.max())
+            p /= p.sum()
+            out[hh] = p @ V[:, hh, :]
+        h = h + layer_w_o @ out.reshape(-1)
+        gu = layer_w_gu @ rms(h, layer_w_n2)
+        act = (gu[:ffn] / (1.0 + np.exp(-gu[:ffn]))) * gu[ffn:]
+        return (h + layer_w_down @ act).astype(np.float32)
+
+    # 权重副本（参考用）
+    layer_w_qkv, layer_w_o = layer.qkv.w, layer.o.w
+    layer_w_gu, layer_w_down = layer.gate_up.w, layer.down.w
+    layer_w_n1, layer_w_n2 = layer.norm1.w, layer.norm2.w
+    # 从设备读回权重（保证参考与内核用的是同一份）
+    def read(ptr, n):
+        return rt.download(ptr, n, np.float32).reshape(-1)
+    layer_w_qkv = read(layer_w_qkv, 3 * dim * dim).reshape(3 * dim, dim)
+    layer_w_o = read(layer_w_o, dim * dim).reshape(dim, dim)
+    layer_w_gu = read(layer_w_gu, 2 * ffn * dim).reshape(2 * ffn, dim)
+    layer_w_down = read(layer_w_down, dim * ffn).reshape(dim, ffn)
+    layer_w_n1 = read(layer_w_n1, dim)
+    layer_w_n2 = read(layer_w_n2, dim)
+
+    worst = 0.0
+    ntok = 8
+    t0 = time.perf_counter()
+    for pos in range(ntok):
+        tok = rng.standard_normal(dim).astype(np.float32) * 0.5
+        got = layer.forward(tok, pos=pos)
+        err = _rel(got, ref_layer(tok, pos))
+        worst = max(worst, err)
+        if pos == ntok - 1:
+            print(f"[layer] {ntok} 个 token 逐 token 对账 max_rel={worst:.2e} "
+                  f"time={(time.perf_counter() - t0) / ntok * 1e3:.2f} ms/token "
+                  f"（含上传/下载）")
+    if worst > 1e-5:
+        FAILURES.append(f"TransformerLayer(max_rel={worst:.1e})")
+    layer.ws.free()
+
+
 def run_flash_attention(rt: Runtime, rng) -> None:
     """融合多头解码注意力（`FlashAttention`：2 个 launch 覆盖所有头）对账 + 计时。"""
     for n_heads, dh, n_kv, max_len in ((8, 128, 1000, 2048), (4, 64, 300, 512),
@@ -332,6 +415,7 @@ def main() -> int:
     run_rope(rt, 128, rng)
     run_attention(rt, 128, 640, rng)
     run_flash_attention(rt, rng)
+    run_transformer_layer(rt, rng)
     run_f32(rt, args.rows, args.dim, args.ffn, rng)
     run_int4(rt, args.rows, args.dim, args.ffn, rng)
     run_moe(rt, args.rows, args.dim, args.moe_exp, rng)

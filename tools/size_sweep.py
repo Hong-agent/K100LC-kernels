@@ -222,7 +222,7 @@ def g_seq_vit(s: Sweep, rng) -> None:
         sin = rng.standard_normal((rows, half)).astype(np.float32)
         py = s.buf(np.zeros(rows * dim, np.float32))
         s.run("rope_apply_k", rows, 64,
-              [py, s.buf(x), s.buf(cos), s.buf(sin), rows, dim])
+              [py, s.buf(x), s.buf(cos), s.buf(sin), rows, dim, 0, 0])
         a, b = x[:, :half], x[:, half:]
         ref = np.concatenate([a * cos - b * sin, a * sin + b * cos], 1)
         check(s, f"rope rows={rows} dim={dim}",

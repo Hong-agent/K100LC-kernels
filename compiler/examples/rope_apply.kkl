@@ -11,23 +11,29 @@
 #   y[row*dim + j+half] = a*s + b*c
 #
 # 这是 HF Llama / GPT-NeoX 的 `rotate_half` 约定（成对的是 (j, j+half)），
-# 不是 GPT-J 的交错约定 (2j, 2j+1)。cos/sin 表由调用方按位置算好给出，
-# 形状 [rows, half]，所以 prefill（一次多行）和 decode（一行）都能用。
+# 不是 GPT-J 的交错约定 (2j, 2j+1)。cos/sin 表由调用方按位置算好给出
+# （形状 [max_len, half]），所以 prefill（一次多行）和 decode（一行）都能用。
+#
+# 表行 = (row >> tsh) + tbase：给同一个 token 的**多个头**做 RoPE 时，把 x 按
+# `[n_heads, head_dim]` 摆、`rows = n_heads`、`tsh = log2(n_heads)`、
+# `tbase = 位置`，所有头共用同一行表；prefill 一行一个 token 时 `tsh = 0`、
+# `tbase = 起始位置`。
 #
 # grid = rows，workgroup = 64；dim 必须是偶数（half 可以不是 64 的倍数，
 # 最后一轮用 varying 掩码收尾）。
 def rope_apply_k(y: ptr[f32], x: ptr[f32], cs: ptr[f32], sn: ptr[f32],
-                 rows: u32, dim: u32):
+                 rows: u32, dim: u32, tsh: u32, tbase: u32):
     r = bid()
     l = lane()
     half = dim >> 1
+    trow = (r >> tsh) + tbase
     nit = (half + 63) >> 6
     if r < rows:
         for i in range(0, nit):
             j = (i << 6) + l
             if j < half:
-                c = cs[r * half + j]
-                s = sn[r * half + j]
+                c = cs[trow * half + j]
+                s = sn[trow * half + j]
                 a = x[r * dim + j]
                 b = x[r * dim + j + half]
                 y[r * dim + j] = a * c - b * s

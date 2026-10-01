@@ -281,6 +281,26 @@ y_dev = rope.forward_device(x_dev, rows, pos, sync=False)   # 逐 token 免同�
 的交错 `(2j, 2j+1)`。内核 `rope_apply_k` 由本仓库编译器从
 `compiler/examples/rope_apply.kkl` 生成，与 NumPy **逐位相同**。
 
+### 5.0 一整层：`TransformerLayer`
+
+```python
+layer = TransformerLayer(rt, dim=512, n_heads=8, head_dim=64, ffn=1024,
+                         max_len=4096, w_qkv=..., w_o=..., w_gate_up=...,
+                         w_down=..., w_norm1=..., w_norm2=...)
+for pos, tok in enumerate(tokens):
+    h = layer.forward(tok, pos=pos)      # 一次 sync 一个 token
+```
+
+一层 = `RMSNorm → W_qkv → RoPE → 追加 KV → 融合多头注意力 → W_o → 残差 →
+RMSNorm → gate/up → SwiGLU → W_down → 残差`，**全程设备侧串联**，逐 token 只
+`sync` 一次。权重按「拼块」摆（QKV 合一、gate/up 合一），RoPE 一次处理所有头。
+
+实测（dim=512、8 头 × 64、ffn=1024）：**0.31 ms/token**（设备侧连续 30 个 token、
+一次 sync），逐 token 与 NumPy 参考对账 **1.9e-07**。这条路线上一个 token 约
+**16 次 launch**，而相邻 launch 之间是依赖关系——实测每次约 19 us 的串行延迟，
+所以这 0.31 ms 里大头是「启动次数」而不是算力（权重 10 MB 只要 ~17 us）。
+下一步的优化方向就是把 launch 数继续压（见 [`ROADMAP.md`](../ROADMAP.md) B4）。
+
 ### 5.0.1 多头解码注意力：`FlashAttention`
 
 ```python

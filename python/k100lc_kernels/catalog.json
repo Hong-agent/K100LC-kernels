@@ -10435,70 +10435,80 @@
     {
      "off": 40,
      "size": 4,
-     "kind": "hidden_block_count_x"
+     "kind": "by_value"
     },
     {
      "off": 44,
      "size": 4,
-     "kind": "hidden_block_count_y"
+     "kind": "by_value"
     },
     {
      "off": 48,
      "size": 4,
-     "kind": "hidden_block_count_z"
+     "kind": "hidden_block_count_x"
     },
     {
      "off": 52,
-     "size": 2,
-     "kind": "hidden_group_size_x"
-    },
-    {
-     "off": 54,
-     "size": 2,
-     "kind": "hidden_group_size_y"
+     "size": 4,
+     "kind": "hidden_block_count_y"
     },
     {
      "off": 56,
-     "size": 2,
-     "kind": "hidden_group_size_z"
-    },
-    {
-     "off": 58,
-     "size": 2,
-     "kind": "hidden_remainder_x"
+     "size": 4,
+     "kind": "hidden_block_count_z"
     },
     {
      "off": 60,
      "size": 2,
-     "kind": "hidden_remainder_y"
+     "kind": "hidden_group_size_x"
     },
     {
      "off": 62,
      "size": 2,
-     "kind": "hidden_remainder_z"
+     "kind": "hidden_group_size_y"
     },
     {
      "off": 64,
-     "size": 8,
-     "kind": "hidden_global_offset_x"
+     "size": 2,
+     "kind": "hidden_group_size_z"
+    },
+    {
+     "off": 66,
+     "size": 2,
+     "kind": "hidden_remainder_x"
+    },
+    {
+     "off": 68,
+     "size": 2,
+     "kind": "hidden_remainder_y"
+    },
+    {
+     "off": 70,
+     "size": 2,
+     "kind": "hidden_remainder_z"
     },
     {
      "off": 72,
      "size": 8,
-     "kind": "hidden_global_offset_y"
+     "kind": "hidden_global_offset_x"
     },
     {
      "off": 80,
      "size": 8,
-     "kind": "hidden_global_offset_z"
+     "kind": "hidden_global_offset_y"
     },
     {
      "off": 88,
+     "size": 8,
+     "kind": "hidden_global_offset_z"
+    },
+    {
+     "off": 96,
      "size": 2,
      "kind": "hidden_grid_dims"
     }
    ],
-   "kernarg_size": 96,
+   "kernarg_size": 104,
    "group_segment": 0,
    "private_segment": 0
   },

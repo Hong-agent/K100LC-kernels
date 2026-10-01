@@ -670,7 +670,7 @@ rt.launch("flash_dec_comb_k", n_heads, 64, [pout, po, pm, pl, dh, nsplit, inv])
 
 # RoPE（rotate-half）：y[j]=a*c-b*s、y[j+half]=a*s+b*c，a/b 是 x 的前后半。
 #   cos/sin 形状 [rows, half]（每个位置一套表），grid = rows，wg = 64
-rt.launch("rope_apply_k", rows, 64, [py, px, pcos, psin, rows, dim])
+rt.launch("rope_apply_k", rows, 64, [py, px, pcos, psin, rows, dim, tsh, tbase])
 #   （运行时封装见 `k100lc_kernels.model.RoPE`：表常驻显存，pos 直接指到表里）
 
 # V 行主序 → Vt [dim, max_len] 转置（解码注意力 append 用；编译器 + DSL 共享内存
