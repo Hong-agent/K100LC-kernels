@@ -68,11 +68,11 @@ GEMV / 量化解码 / 融合点积），全部通过。
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| D1 | 寄存器 liveness / 复用 | 已完成 | v1.4.0 修掉「变量区与临时区重叠」；v1.6.0 加临时寄存器池（用完即归还），长表达式 60 项 → 300+ 项；地址对不再写死 v254/v255，`vgpr_count` 256 → 68 |
-| D2 | spill | 待办 | 现在只有「同时存活的临时值」超过 v245 才报错，实际很难触到；真要做 spill 得先有栈帧约定 |
+| D1 | 寄存器 liveness / 复用 | 已完成 | v1.8.7 的 spill 顺带把「按使用次数排热/冷」的启发式做进了寄存器规划（最热的 160 个变量优先保寄存器）； v1.4.0 修掉「变量区与临时区重叠」；v1.6.0 加临时寄存器池（用完即归还），长表达式 60 项 → 300+ 项；地址对不再写死 v254/v255，`vgpr_count` 256 → 68 |
+| D2 | spill | 已完成 | v1.8.7：**变量**按使用次数排序，最热的 160 个进 VGPR，其余写进 per-workgroup LDS 帧（每 lane 一个 4 字节槽）。之前 230 个变量的内核直接报 「VGPR 变量区已到 v237（上限 v200）」；现在能编、结果对（230 变量求和 rel 1.4e-07），代价实测：73 个 spill 176.8 us → 123 个 spill 184.0 us（**+4.1%**，每个 spill 变量在循环里被读 24 次）。临时值仍不 spill（超 v245 报错，提示把表达式写短）；约束：spill 帧按 64 lane 布局，内核必须以 workgroup=64 启动 |
 | D3 | varying `if/else` | 已完成 | v1.6.2 用 exec 掩码实现（v1.6.3 修掉嵌套时 else 被跳过）；顺带修掉「f32 比较全都编不过」与 `^` 没接线 |
 | D4 | 新内建 | 进行中 | 已补 `min`/`max`（类型感知）、`floor`/`ceil`/`trunc`/`rint`/`fract`/`ubyte`；运算符补了 `^`、整数比较全表、2 的幂常量 `/` `%`；v1.8.5 补了 workgroup 共享内存（`lds(n)` / `sm[i]` / `barrier()`，见 D8）；后续按需加 `frexp`/`mulhi`/`bfi` 等 |
-| D5 | 编译器自检 | 部分完成 | 已有 15 项（vadd/silu/axpy/loop/many_vars/long_expr/f32-比较/varying-ifelse/DSL 特性扫描/整数比较与除模/取整族内建/while/跨 varying 区 uniform 赋值/混合类型提升/超越函数 hazard）+ 动态启动；仍缺「生成 vs 参考」的批量随机回归集 |
+| D5 | 编译器自检 | 部分完成 | 已有 18 项（vadd/silu/axpy/loop/many_vars/long_expr/f32-比较/varying-ifelse/DSL 特性扫描/整数比较与除模/取整族内建/while/跨 varying 区 uniform 赋值/混合类型提升/超越函数 hazard/共享内存 LDS/RoPE/spill）+ 动态启动；仍缺「生成 vs 参考」的批量随机回归集 |
 | D6 | 后端正确性扫描 | 已完成 | 「拿文档当规格逐项对账」这个方法连查出**七类**问题：f32 比较全挂、整数比较 8 个运算符挂、`^` 没接线、嵌套 varying if/else 算错、**整数常量在 f32 上下文被当位模式**（`x[i]+1` 直接丢）、**超越函数漏 `s_nop`**（部分 lane 才错）、**跨 varying 区改 uniform（SGPR）变量**（整波执行，`c=0` 在区外 + `if x[i]<0: c=c+1` 在区内 → 条件不成立的 lane 也变 1，128 个元素错 32 个）。已扫完并固化：一元负号、`& \| ^ << >>`、增强赋值（含 `%=` 等）、两种 `range`、嵌套 for + break 只跳内层、uniform/varying if-else、多内核单文件、`u8/u16` 指针、`load16`/`s8`/`f16_to_f32`、f32/int 比较全表、2 的幂除模、取整族内建、`and`/`or`、跨区标量赋值、varying 区里的 `break`/`continue`、混合类型提升、超越函数 hazard；不支持的特性（varying 条件的 `while`、`return`、指针赋值、链式比较、一般除数）都给出明确报错 |
 | D7 | 循环语句 | 部分完成 | v1.7.4 补上 `while`（条件必须 uniform；`while 1` + break 也支持）；varying 条件的 `while` 还需要 loop-carried 掩码约定，仍待办。v1.8.2 起 `while` 的循环变量必须建在 uniform 上下文里——varying 区里建的标量是「整波记账」语义（跨区改直接报错），拿它当循环条件就不再是 uniform |
 | D8 | 共享内存（LDS） | 已完成 | v1.8.5：`sm = lds(n)` 声明 f32 槽、`sm[i]` / `sm[i] = v` 走 `ds_read_b32` / `ds_write_b32`、`barrier()` 发 `s_waitcnt lgkmcnt(0)` + `s_barrier`；字面量下标折进 16 位立即偏移，HSACO 按用量声明 `group_segment`（256 B 对齐、上限 64 KB）。报错：非常量尺寸 / 字面量下标越界 / 超 64 KB / `barrier()` 当表达式。回归 `check_lds`（第 16 项）。第一个用户：`vt_scatter_k`（64×65 分块转置，每行 +1 填充拆 bank 冲突），把解码注意力 V 转置 2.12 ms/次 → **0.134 ms/次** |

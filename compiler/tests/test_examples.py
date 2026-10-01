@@ -899,6 +899,53 @@ def check_rope(out_dir: pathlib.Path) -> None:
     print("RoPE（rotate-half，4 组尺寸）ok")
 
 
+def check_spill(out_dir: pathlib.Path) -> None:
+    """回归：变量太多时 spill 到 LDS 帧（v1.8.7）。
+
+    VGPR 变量区从 v1.8.0 起是「每个名字一个专属寄存器」，超过 v200 直接报错
+    （约 197 个变量）。现在改成：按**使用次数**排序，最热的 `VAR_VGPR_BUDGET`
+    （160）个留在 VGPR，冷的写进 per-workgroup 的 LDS 帧（每个 lane 一个 4 字节
+    槽，槽距 4 B、槽基址走 `ds_*` 的立即偏移）。uniform 标量不进 LDS——它们本来
+    就该是整波一份的 SGPR（这一点很关键：早先按「第一版」实现时把 uniform 变量
+    也 spill 了，`while a < 3 and b < 5` 立刻变成 varying 条件而编不过）。
+
+    这里用 230 个**互相不同**的 f32 变量、最后求和，任何一个槽写错/串味都会
+    让和不对。
+    """
+    nvars = 230
+    body = [f"        v{k} = x[i] * {k + 1}.0 + {k}.0" for k in range(nvars)]
+    body += ["        acc = 0.0"]
+    body += [f"        acc = acc + v{k}" for k in range(nvars)]
+    body += ["        y[i] = acc"]
+    src = ("def big(x: ptr[f32], y: ptr[f32], n: u32):\n"
+           "    i = gid()\n"
+           "    if i < n:\n" + "\n".join(body) + "\n")
+    h = compile_source(src, out_dir, "big")[0]
+    asm_text = (out_dir / "big.s").read_text()
+    import json as _json
+    cat = _json.loads((out_dir / "big.catalog.json").read_text())
+    group = cat["kernels"][0]["group_segment"]
+    assert "ds_write_b32" in asm_text and "ds_read_b32" in asm_text, "没有走 LDS spill"
+    assert group > 0, f"group_segment={group}（spill 帧没报进去）"
+
+    n = 64
+    x = (np.arange(n, dtype=np.float32) * 0.01 + 0.5)
+    o = run_one(h, "big",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": n}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * n}},
+                grid=n, workgroup=64)
+    got = np.array(o["y"], np.float32)
+    s1 = float(sum(k + 1 for k in range(nvars)))
+    s0 = float(sum(k for k in range(nvars)))
+    ref = (x * s1 + s0).astype(np.float32)
+    rel = float(np.abs(got - ref).max() / max(1e-9, float(np.abs(ref).max())))
+    assert rel < 1e-5, f"spill 求和错：rel={rel:.2e} got={got[:3]} ref={ref[:3]}"
+    print(f"变量 spill 到 LDS（{nvars} 个变量、group_segment={group} B、"
+          f"rel={rel:.1e}）ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -918,6 +965,7 @@ def main() -> int:
     check_transcendental_hazards(out)
     check_lds(out)
     check_rope(out)
+    check_spill(out)
     return 0
 
 

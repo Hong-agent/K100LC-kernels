@@ -34,6 +34,12 @@ class CompileError(Exception):
 
 ELEM_SIZE = {"f32": 4, "u32": 4, "s32": 4, "u16": 2, "s16": 2, "u8": 1, "s8": 1}
 
+# 命名变量能占多少 VGPR。超过的部分 **spill 到 per-workgroup 的 LDS 帧**（每个
+# lane 一个 4 字节槽）。留出余量是给临时值区（临时区从变量区之后开始，一直到
+# v245）——变量区越大，能同时存活的临时值越少。
+VAR_VGPR_BUDGET = 160
+SPILL_LANES = 64          # LDS 帧按 64 lane 布局（内核必须以 workgroup=64 启动）
+
 
 def _align(n: int, a: int) -> int:
     return (n + a - 1) // a * a
@@ -149,6 +155,11 @@ class CodeGen:
         # 数据要用 `barrier()`。名字 → (字节偏移, 元素个数)。
         self.lds_arrays: dict[str, tuple[int, int]] = {}
         self.lds_bytes = 0
+        # spill：变量名 → LDS 帧里的字节基址（每个 lane 一个 4 字节槽，槽距 4 B）
+        self.spill_slots: dict[str, int] = {}
+        self.spill_base_v: int | None = None
+        self.spill_ty: dict[str, str] = {}        # spill 变量的类型（f32 / u32 / …）
+        self.spill_defined: set[str] = set()      # 已经写过至少一次
         self.zero_v = 1
         self.label_n = 0
         self._parse_params()
@@ -172,7 +183,9 @@ class CodeGen:
             r = self.tmp_v
             self.tmp_v += 1
             if self.tmp_v > 245:
-                raise CompileError("VGPR 溢出（不做 spill）：同时存活的临时值太多")
+                raise CompileError(
+                    "VGPR 溢出：同时存活的**临时值**太多（临时值不做 spill，"
+                    "把表达式写短一点，或拆成多条语句让临时值尽快释放）")
         self.max_v = max(self.max_v, r)
         self.live_temps.add(r)
         return r
@@ -184,13 +197,16 @@ class CodeGen:
         **重叠**——同一个寄存器既放变量又当临时值，生成的内核静默算错
         （实测 62 个局部变量就开始出错）。现在：
 
-          * 每个命名变量拿一个专属 VGPR（v2 起，按首次出现顺序）；
+          * 命名变量按**使用次数**排序，最热的 `VAR_VGPR_BUDGET` 个拿专属 VGPR
+            （v2 起），剩下的 **spill 到 LDS 帧**（每个 lane 一个 4 字节槽，
+            见 `spill_slots`；v1.8.7 之前这里是直接报「变量太多」）；
           * `gid()/tid()/lane()` 的匿名变量按调用点预留；
           * 临时值从 `max(64, 变量区末尾)` 起，和变量区完全不重叠。
         """
         names: list[str] = []
         seen: set[str] = set()
         anon = 0
+        uses: dict[str, int] = {}
 
         def take(nm: str) -> None:
             if nm not in seen:
@@ -221,9 +237,53 @@ class CodeGen:
                     anon += 1
                 elif node.func.id == "gid":
                     anon += 2
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                uses[node.id] = uses.get(node.id, 0) + 1
+
+        # 用户 `lds(...)` 声明按**源码顺序**占 LDS（spill 帧排在它们后面）。
+        decls = []
+        for node in ast.walk(self.fn):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and self._is_lds_decl(node.value)):
+                decls.append((node.lineno, node.col_offset,
+                              node.targets[0].id, node.value))
+        for _ln, _col, nm, call in sorted(decls):
+            cnt = _const_int(call.args[0]) if len(call.args) == 1 else None
+            if cnt is None:
+                raise CompileError(
+                    "lds(n) 的 n 必须是整数字面量（编译期就要定尺寸）")
+            if cnt <= 0:
+                raise CompileError("lds(n) 的 n 必须为正")
+            off = _align(self.lds_bytes, 16)
+            if off + 4 * cnt > 65536:
+                raise CompileError(
+                    f"{nm}: 共享内存超了（要 {off + 4 * cnt} B，每 workgroup "
+                    f"最多 64 KB）；已经用了 {self.lds_bytes} B")
+            self.lds_arrays[nm] = (off, cnt)
+            self.lds_bytes = off + 4 * cnt
+
+        # 变量分配到 VGPR / LDS：按使用次数从多到少排，热的进寄存器。
+        order = sorted(range(len(names)),
+                       key=lambda i: (-uses.get(names[i], 0), i))
+        keep = {names[i] for i in order[:VAR_VGPR_BUDGET]}
+        spilled = [nm for nm in names if nm not in keep]
+        if spilled:
+            base = _align(self.lds_bytes, 16)
+            need = len(spilled) * SPILL_LANES * 4
+            if base + need > 65536:
+                raise CompileError(
+                    f"{self.fn.name}: 变量太多，{len(spilled)} 个 spill 变量要 "
+                    f"{need} B LDS（加上已有的 {self.lds_bytes} B 超了 64 KB）；"
+                    f"把内核拆小，或减少同时存活的变量")
+            for i, nm in enumerate(spilled):
+                self.spill_slots[nm] = base + i * SPILL_LANES * 4
+            self.lds_bytes = base + need
 
         r = 2
         for nm in names:
+            if nm in self.spill_slots:
+                continue
             self.var_regs[nm] = r
             r += 1
         self.var_anon = r
@@ -234,13 +294,23 @@ class CodeGen:
         self.addr_lo = self.var_anon_end
         self.addr_hi = self.var_anon_end + 1
         self.var_v = self.addr_hi + 1
+        if self.spill_slots:
+            # spill 的地址基址（lane*4）要跨语句长期持有，单独留一个寄存器
+            self.spill_base_v = self.var_v
+            self.var_v += 1
         self.tmp_base = max(64, self.addr_hi + 1)
+        if self.spill_slots:
+            self.tmp_base = max(self.tmp_base, self.spill_base_v + 1)
         self.tmp_v = self.tmp_base
-        self.max_v = max(self.max_v, self.var_anon_end - 1)
+        self.max_v = max(self.max_v, self.var_anon_end - 1,
+                         self.var_v - 1)
         if self.tmp_base > 200:
             raise CompileError(
                 f"{self.fn.name}: 变量太多，VGPR 变量区已到 v{self.var_anon_end}"
-                f"（上限 v200）")
+                f"（上限 v200）。命名变量已经在 v{VAR_VGPR_BUDGET} 之后 spill 到 "
+                f"LDS，这里超的是**匿名槽位**（每次 `gid()` 要 2 个、`tid()`/"
+                f"`lane()` 各 1 个）——把 gid()/lane() 存进变量复用，"
+                f"或拆小内核")
 
     def free_tmp_v(self, reg: int) -> None:
         """归还一个临时寄存器（只有由 `alloc_tmp_v` 真正发出去过的才收）。"""
@@ -297,6 +367,9 @@ class CodeGen:
         self.emit(".text")
         self.emit(f"k_{self.fn.name}:")
         self.emit(f"v_mov_b32_e32 v{self.zero_v}, 0")
+        if self.spill_slots:
+            # spill 帧的 lane 地址：lane*4（槽距 4 B，槽基址走 ds_* 的立即偏移）
+            self.emit(f"v_lshlrev_b32_e32 v{self.spill_base_v}, 2, v0")
         for p in self.params:
             if p.is_ptr:
                 s = self._alloc_var_s(2)
@@ -464,6 +537,8 @@ class CodeGen:
         if isinstance(node, ast.Name):
             if node.id in self.env:
                 return self.env[node.id]
+            if node.id in self.spill_slots:
+                return self._spill_read(node.id)
             raise CompileError(f"未定义变量 {node.id}")
         if isinstance(node, ast.UnaryOp):
             if isinstance(node.op, ast.USub):
@@ -999,7 +1074,10 @@ class CodeGen:
             t = node.target
             if not isinstance(t, ast.Name):
                 raise CompileError("只支持 Name 增强赋值")
-            cur = self.env[t.id]
+            if t.id in self.spill_slots:
+                cur = self._spill_read(t.id)
+            else:
+                cur = self.env[t.id]
             rhs = self.expr(node.value)
             op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
                   ast.Mod: "%", ast.BitAnd: "&", ast.BitOr: "|",
@@ -1049,23 +1127,12 @@ class CodeGen:
                 and node.func.id == "lds")
 
     def _declare_lds(self, name: str, node: ast.Call) -> None:
-        """`sm = lds(n)`：给这个名字分一段 workgroup 共享内存（f32 槽）。"""
-        if name in self.lds_arrays or name in self.env:
+        """`sm = lds(n)`：共享内存段**已经在 `_plan_registers` 里分配好了**
+        （因为 spill 帧要排在用户数组后面，必须先知道它们的位置），这里只校验。"""
+        if name not in self.lds_arrays:
+            raise CompileError(f"{name}: lds 声明没有被预扫描到（编译器内部错误）")
+        if name in self.env:
             raise CompileError(f"{name}: 名字已被占用")
-        if len(node.args) != 1:
-            raise CompileError("lds(n) 只接受一个参数")
-        cnt = _const_int(node.args[0])
-        if cnt is None:
-            raise CompileError("lds(n) 的 n 必须是整数字面量（编译期就要定尺寸）")
-        if cnt <= 0:
-            raise CompileError("lds(n) 的 n 必须为正")
-        off = _align(self.lds_bytes, 16)      # 每个数组 16 字节对齐（便于将来 dwordx4）
-        if off + 4 * cnt > 65536:
-            raise CompileError(
-                f"{name}: 共享内存超了（要 {off + 4 * cnt} B，卡上每 workgroup "
-                f"最多 64 KB）；已经用了 {self.lds_bytes} B")
-        self.lds_arrays[name] = (off, cnt)
-        self.lds_bytes = off + 4 * cnt
 
     def _lds_addr(self, name: str, index_node) -> tuple[int, int, int, Val]:
         """返回 `(vaddr_reg, 立即偏移, 元素个数, 索引值)`；索引是字面量时用
@@ -1098,6 +1165,26 @@ class CodeGen:
         self.emit(f"ds_write_b32 v{vaddr}, v{src} offset:{off}")
         self._release(value)
 
+    # ---------------- spill（变量溢出到 LDS 帧） ----------------
+    def _spill_write(self, name: str, value: Val, ty: str) -> None:
+        """把一个 spill 变量的值写回它的 LDS 槽（槽基址 + lane*4）。"""
+        val = self._f32_operand(value) if ty == "f32" else value
+        self.spill_ty[name] = ty
+        self.spill_defined.add(name)
+        src = self.as_vreg(val)
+        self.emit(f"ds_write_b32 v{self.spill_base_v}, v{src} "
+                  f"offset:{self.spill_slots[name]}")
+        self._release(value)
+
+    def _spill_read(self, name: str) -> Val:
+        if name not in self.spill_defined:
+            raise CompileError(f"未定义变量 {name}")
+        r = self.alloc_tmp_v()
+        self.emit(f"ds_read_b32 v{r}, v{self.spill_base_v} "
+                  f"offset:{self.spill_slots[name]}")
+        self.emit("s_waitcnt lgkmcnt(0)")
+        return Val("v", r, self.spill_ty.get(name, "f32"))
+
     def _assign_name(self, name: str, val: Val, force_ty: str | None = None) -> None:
         """给局部变量赋值。
 
@@ -1110,6 +1197,18 @@ class CodeGen:
         if force_ty == "f32":
             val = self._f32_operand(val)        # `v: f32 = 1` 要当 1.0
         ty = force_ty or val.ty
+        if name in self.spill_slots:
+            if (name not in self.spill_defined and self.is_uniform(val)
+                    and ty != "f32"):
+                # 第一次赋值就是 uniform 标量 → 它是整波一份的记账值，不该进
+                # per-lane 的 LDS 帧（否则会被当成 VGPR，varying/uniform 的语义
+                # 都会变）。撤掉它的槽，按普通变量走（SGPR）。
+                del self.spill_slots[name]
+            else:
+                # 溢出到 LDS 的变量：每次读写都走 ds_*（槽基址 + lane*4）
+                self._spill_write(name, val, ty)
+                self._release(val)
+                return
         if name in self.env:
             dst = self.env[name]
             if dst.kind == "v":

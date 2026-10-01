@@ -100,6 +100,14 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
   只有部分 lane 算错**（实测 `y[i] = sqrt(4)` 时每 16 个元素里第 8~11 号是 0，
   看起来像随机丢数据）。回归：`check_transcendental_hazards`（9 项）。
 * 常量除法会折叠；除以常量会变成乘倒数。
+* **变量 spill 到 LDS**（v1.8.7）：命名变量按**使用次数**排序，最热的
+  `VAR_VGPR_BUDGET`（160）个拿专属 VGPR，其余写进 per-workgroup 的 LDS 帧
+  （每个 lane 一个 4 字节槽，槽基址走 `ds_*` 的立即偏移、lane 地址一条
+  `v_lshlrev ... 2, v0` 全程复用）。所以「几百个局部变量」的核不会再直接
+  报错，而是多花几次 LDS 访存。**约束**：spill 帧按 64 lane 布局，这样的内核
+  必须以 `workgroup=64` 启动；uniform 标量不 spill（它们本来该是整波一份的
+  SGPR，进 per-lane 帧会改变语义）；临时值仍然不 spill（超了还是报错）。
+  回归：`check_spill`（230 个变量，对账 1.4e-07）。
 * 寄存器分配：**变量区和临时区不重叠**。编译前先扫一遍 AST，给每个命名
   变量分一个专属 VGPR（v2 起），并给 `gid()/tid()/lane()` 预留匿名槽位；
   地址对（lo/hi）紧接其后，临时值再从 `max(64, 地址对之后)` 起。这样局部
