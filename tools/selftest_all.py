@@ -815,6 +815,29 @@ def t_quant_rows_fast(ctx: Ctx):
     return judge(err, np.zeros(1), atol=0.0, rtol=0.0)
 
 
+@case("quant", "quant_rows_k")
+def t_quant_rows(ctx: Ctx):
+    """旧版行量化：与 `quant_rows_fast_k` 输出逐位一致。
+
+    约定：`grid = rows`，**workgroup 必须等于 K/G（组数）**——给大了
+    `sc` 会被写坏（实测 wg=64 时 scale 全是垃圾，`q` 却还对）。
+    参数是 `(q, sc, x, K, G, rows, in_stride, in_off)`。
+    """
+    rows, k, g = 32, 512, 128
+    ng = k // g
+    rng = np.random.default_rng(73)
+    x = rng.standard_normal((rows, k)).astype(np.float32)
+    qref, scref = quant_rows_ref(x, k, g)
+    pq = ctx.out(rows * k // 8, np.uint32)
+    psc = ctx.out(ng * rows)
+    ctx.launch("quant_rows_k", rows, ng,
+               [pq, psc, ctx.buf(x), k, g, rows, k, 0])
+    q = ctx.get(pq, rows * k // 8, np.uint32).reshape(rows, k // 8)
+    sc = ctx.get(psc, ng * rows).reshape(ng, rows)
+    err = 0.0 if np.array_equal(q, qref) and np.array_equal(sc, scref) else 1.0
+    return judge(err, np.zeros(1), atol=0.0, rtol=0.0)
+
+
 @case("quant", "quant_act4")
 def t_quant_act4(ctx: Ctx):
     k = 5120
