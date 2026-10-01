@@ -34,6 +34,7 @@ import gen_q8_0_dequant  # noqa: E402
 import gen_softmax  # noqa: E402
 import gen_softmax_vec  # noqa: E402
 import gen_layernorm  # noqa: E402
+import gen_rmsnorm  # noqa: E402
 import gen_topk  # noqa: E402
 import gen_router_top10  # noqa: E402
 import gen_gemv_qdot  # noqa: E402
@@ -58,7 +59,7 @@ MODULES = [
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
     gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
     gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_softmax_vec,
-    gen_layernorm, gen_topk,
+    gen_layernorm, gen_rmsnorm, gen_topk,
     gen_router_top10,
     gen_gemv_qdot,
     gen_int4_dot,
@@ -105,7 +106,8 @@ def main() -> int:
                               1024 if name in ("gemv_f32_warp_k",
                                                "gemv_f32_warp_acc_k",
                                                "gemv_f32_gated_acc_k", "softmax_k",
-                                               "softmax_vec_k", "layernorm_k")
+                                               "softmax_vec_k", "layernorm_k",
+                                               "rmsnorm_fast_k")
                               else 0),
             "private_segment": 0,
         })

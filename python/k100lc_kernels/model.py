@@ -488,8 +488,16 @@ class RMSNorm:
 
     def forward_device(self, x_dev: int, rows: int, sync: bool = False) -> int:
         out = self.ws.buffer(self.tag + ".out", rows * self.dim * 4)
-        self.rt.launch("rmsnorm_k", rows, 64,
-                       [out, int(x_dev), self.w, self.dim, self.eps, 0])
+        if self.rt.has("rmsnorm_fast_k"):
+            # 包里的 `rmsnorm_k` 是 HIP 编出来的：每个元素一条 load + 一条
+            # `s_waitcnt vmcnt(0)`，dim=512 时是 8 次完整访存往返，单次实测
+            # 15.1 us（投递地板 7.3）。自研的 `rmsnorm_fast_k` 把 load 按 4 个
+            # 一批发，dim=512 只要 2 次往返，实测 7.6 us；数值一致到 1e-7。
+            self.rt.launch("rmsnorm_fast_k", rows, 64,
+                           [out, int(x_dev), self.w, self.dim, self.eps])
+        else:
+            self.rt.launch("rmsnorm_k", rows, 64,
+                           [out, int(x_dev), self.w, self.dim, self.eps, 0])
         if sync:
             self.rt.sync()
         return out

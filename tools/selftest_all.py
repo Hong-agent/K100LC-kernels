@@ -278,6 +278,30 @@ def t_rmsnorm(ctx: Ctx):
     return judge(np.abs(ctx.get(y, rows * dim).reshape(rows, dim) - ref).max(), ref)
 
 
+@case("norm", "rmsnorm_fast_k")
+def t_rmsnorm_fast(ctx: Ctx):
+    """自研的 RMSNorm（`rmsnorm_fast_k`，load 4 个一批），尺寸扫到批量/收尾两条路。
+
+    参数 `(y, x, w, dim, eps)`（**没有** HIP 那版的 `flag`）。
+    """
+    rng = np.random.default_rng(81)
+    worst = 0.0
+    for rows, dim in ((4, 256), (1, 512), (3, 64), (2, 5120), (5, 320)):
+        x = (rng.standard_normal((rows, dim)) * 2.0).astype(np.float32)
+        w = rng.random(dim).astype(np.float32) + 0.5
+        eps = 1e-5
+        y = ctx.out(rows * dim)
+        ctx.launch("rmsnorm_fast_k", rows, 64,
+                   [y, ctx.buf(x), ctx.buf(w), dim, np.float32(eps)])
+        ref = x / np.sqrt((x ** 2).mean(axis=1, keepdims=True) + eps) * w
+        worst = max(worst, float(np.abs(
+            ctx.get(y, rows * dim).reshape(rows, dim) - ref).max()))
+        ref_scale = float(np.abs(ref).max())
+        if worst > 1e-4 + 1e-5 * max(1.0, ref_scale):
+            return judge(worst, ref)
+    return judge(worst, np.ones(1, np.float32))
+
+
 @case("norm", "rmsnorm_gated_k")
 def t_rmsnorm_gated(ctx: Ctx):
     rows, dim = 4, 256

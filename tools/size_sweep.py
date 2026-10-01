@@ -102,6 +102,12 @@ def g_norm(s: Sweep, rng) -> None:
         ref = x / np.sqrt((x ** 2).mean(1, keepdims=True) + 1e-5) * w
         check(s, f"rmsnorm dim={dim}",
               int((np.abs(s.get(y, rows * dim).reshape(rows, dim) - ref) > 1e-4).sum()))
+        # 自研版（load 4 个一批）：同一个扫描，确认批量/收尾两条路都对
+        y2 = s.buf(np.zeros(rows * dim, np.float32))
+        s.run("rmsnorm_fast_k", rows, 64,
+              [y2, s.buf(x), s.buf(w), dim, np.float32(1e-5)])
+        check(s, f"rmsnorm_fast dim={dim}",
+              int((np.abs(s.get(y2, rows * dim).reshape(rows, dim) - ref) > 1e-4).sum()))
     for cols in (64, 128, 256, 512, 1024, 4096, 16384):
         x = (rng.standard_normal((3, cols)).astype(np.float32) * 2)
         e = np.exp(x - x.max(1, keepdims=True))

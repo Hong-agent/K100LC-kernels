@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.9.10
+
+**新内核 `rmsnorm_fast_k`：RMSNorm 单次 15.0 → 7.5 us（2.0 倍），一层
+decoder 0.211 → 0.189 ms/token（−10%）。**
+
+包里那个 `rmsnorm_k` 是 HIP 编出来的，两趟循环都是**每个元素一条 load 跟一条
+`s_waitcnt vmcnt(0)`**——dim=512、64 lane 时一趟就是 8 次完整访存往返。它本身
+只有 512 个元素要算，却要 15.0 us（投递地板才 7.3 us），**7.7 us 全卡在往返
+延迟上**，和 1.9.6/1.9.8 修的 combine/part 是同一类问题。
+
+新内核用同一套算法（自研汇编器直接生成，`tools/gen_rmsnorm.py`），但把 load
+按 4 个一批发：同一 lane 的相邻元素正好差 64 个 float = 256 字节，落在
+`offset:imm13` 里，所以一条地址算完连发 4 条，只等一次；`dim/64` 不是 4 的
+倍数时剩下的走进单步收尾循环。实测（`dim=512`、grid=1、`LaunchPlan` 批量重放）：
+
+| | us/次 |
+| --- | --- |
+| `rmsnorm_k`（HIP 版） | 15.00 |
+| `rmsnorm_fast_k` | **7.50** |
+
+7.5 us 已经贴着 7.3 us 的投递地板了，也就是说这个内核基本没有可再抠的余量。
+一层 decoder 里有两个 RMSNorm，于是整层从 **0.211 → 0.189 ms/token**。
+
+* `model.RMSNorm.forward_device` 优先走 `rmsnorm_fast_k`（`rt.has()` 判断，
+  旧内核包自动回退到 `rmsnorm_k`）；
+* 内核包 140 → 141；`tools/selftest_all.py` 加 `rmsnorm_fast_k` 用例
+  （dim=64/256/320/512/5120，覆盖批量和收尾两条路，自检 80 → 81）；尺寸扫描
+  里也加了同一组 dim；
+* 对账：自检 max_abs 7.2e-07，量级和 `rmsnorm_k` 的 4.8e-07 一致。
+
+（这也验证了 B4 的账：一圈 10 个内核里，凡是「没多少计算量、只是被派发出来
+的」内核，把它的访存往返压掉就等于白赚 ~7.6 us/个。）
+
 ## 1.9.9
 
 **把「每次 dispatch ~7 us」这件事查到底了：是硬件 retire 速率，改不动。**
