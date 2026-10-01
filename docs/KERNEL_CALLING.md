@@ -659,6 +659,13 @@ rt.launch("split_qkv_k", T, 64, [pq, pk, pv, px, T, qn, kn, vn])
 rt.launch("kv_append_k_k", grid, 64, pkv, pstate, px, ...)
 # ViT LayerNorm
 rt.launch("vit_ln_kernel", grid, 64, [py, px, pw, pb, rows, cols, eps])
+
+# V 行主序 → Vt [dim, max_len] 转置（解码注意力 append 用；编译器 + DSL 共享内存
+# 生成的核，64x65 分块、每行 +1 填充避免 bank 冲突）
+#   vt[d*ystride + y0 + t] = v[t*vstride + d]，只动 [y0, y0+rows) 这几列
+#   grid = ceil(rows/64) * (dim/64)，cshift = log2(dim/64)（要求 dim%64==0 且是 2 的幂）
+rt.launch("vt_scatter_k", ((rows + 63) // 64) * (dim // 64), 64,
+          [pvt, pv, rows, dim, dim, max_len, y0, cshift])
 ```
 
 长行（整行长度 ≥ 2048）的 **softmax 分块**四件套 + 输出侧归一化

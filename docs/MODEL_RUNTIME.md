@@ -269,7 +269,10 @@ cache.append_device(k_dev, v_dev, rows, sync=False)   # k_dev/v_dev 是 [rows,di
 from k100lc_kernels import Attention
 
 attn = Attention(rt, dim=128, max_len=4096, tag="attn0")   # dim 与 max_len 都是 64 的倍数
-attn.append(k, v)              # k/v 是 [rows, dim]（V 会转置写进缓存的转置布局）
+attn.append(k, v)              # k/v 是 [rows, dim]
+#   V 的转置由内核 `vt_scatter_k` 在**设备侧**做（v1.8.5）：
+#   主机逐列转置是 2.12 ms/次（dim=128、rows=1），现在 0.134 ms/次。
+#   设备侧追加用 attn.append_device(k_dev, v_dev, rows)，同样不再回主机。
 out = attn.forward(q)          # q [dim] → [dim]
 # 逐 token 时用设备侧接口，避免每层一次 sync：
 out_dev = attn.forward_device(q_dev, sync=False)

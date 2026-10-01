@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.8.5
+
+**编译器加 workgroup 共享内存（LDS）**，并用它把解码注意力的 V 转置从
+**2.12 ms/次降到 0.134 ms/次**（15.8 倍）。内核包 131 → 132。
+
+### 编译器：`sm = lds(n)` / `sm[i]` / `barrier()`
+
+```python
+def rev(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    sm = lds(64)                 # 64 个 f32 槽（编译期定尺寸，`lds(64*65)` 也行）
+    if i < n:
+        sm[i & 63] = x[i]        # ds_write_b32
+    barrier()                    # s_waitcnt lgkmcnt(0) + s_barrier
+    if i < n:
+        y[i] = sm[(63 - i) & 63] # ds_read_b32
+```
+
+* 字面量下标会折进 `ds_*` 的 16 位立即偏移（地址用 `v{zero_v}`），动态下标
+  才花一条 `v_lshlrev_b32 ... 2`。
+* 生成的 HSACO 按实际用量声明 `group_segment`（256 B 对齐，上限 64 KB，
+  多数组各按 16 B 对齐）。
+* 报错：`lds(非常量)`、字面量下标越界、共享内存超限、`barrier()` 当表达式。
+* 回归：`check_lds`（编译器测试第 16 项）——lane 反向（varying 下标）、
+  单 lane 求和（uniform 下标 + `for`）、`vt_scatter_k` 6 组形状，外加 4 类报错。
+
+### 内核：`vt_scatter_k`（`compiler/examples/vt_scatter.kkl`，编译器生成）
+
+解码注意力要把 V 存成 `Vt [dim, max_len]`（这样 `out = Vt·P` 是标准 GEMV）。
+原来这条路在**主机**上转置：一次 download + `dim` 次 upload——`dim=128、rows=1`
+时 **2.119 ms/次**（128 次 4 字节上传），比一次注意力前向贵三个量级。
+
+新内核用 64×65 的 LDS 分块转置（每行 +1 填充：读回时相邻 lane 差 65 个字，
+`65 % 32 == 1` 正好错开 bank，不填充就是 32 路冲突）：
+
+```
+sm[t*65 + lane] = v[(r0+t)*vstride + c0 + lane]      # 读连续
+barrier()
+vt[(c0+d)*ystride + y0 + r0 + lane] = sm[lane*65 + d]  # 写连续
+```
+
+| | 改前（主机逐列转置） | 改后（设备侧一个 kernel） | 加速 |
+|---|---:|---:|---:|
+| `append_device` rows=1 dim=128 | 2.119 ms | **0.134 ms** | 15.8× |
+| rows=8 | 1.991 ms | **0.125 ms** | 15.9× |
+| rows=64 | 1.991 ms | **0.147 ms** | 13.5× |
+
+`Attention.append_device` 与 `Attention.append` 都改走这条路（后者只上传一次
+行主序 V + 一个 kernel）；hsaco 里没有 `vt_scatter_k` 或 `dim/64` 不是 2 的幂时
+自动回退到原来的主机路径。
+
+### 验证
+
+* 编译器回归 15 → **16 项**（新增 `check_lds`）。
+* `tools/selftest_all.py` 70 → **71 个用例**（新增 `vt_scatter_k`）；
+  `tools/size_sweep.py` 的 `attn` 组新增 7 组 `vt_scatter` 形状
+  （rows 跨 64 边界、`y0` 非零、dim=64/128/256）。
+* 注意力端到端：3 个随机种子 × 30 组尺寸（90 组合）最大相对误差仍为 2.7e-06。
+* `bash tools/check_all.sh` 全绿。
+
 ## 1.8.4
 
 **`reduce_blocks_k` 的访存串行化**：所有 `*_dot_k`、`int4_dot_k`、以及

@@ -753,6 +753,119 @@ def check_transcendental_hazards(out_dir: pathlib.Path) -> None:
     print(f"超越函数 hazard（{len(cases)} 项）ok")
 
 
+def check_lds(out_dir: pathlib.Path) -> None:
+    """回归：DSL 的 workgroup 共享内存（`sm = lds(n)` / `sm[i]` / `barrier()`）。
+
+    v1.8.5 加的。三件事各钉一个用例：
+
+    * **varying 下标**：每个 lane 写自己的槽，屏障后读别人的槽（lane 反向）；
+    * **uniform 下标 + 循环**：一个 lane 用 `for j in range(0, 64)` 把 64 个槽相加
+      （字面量下标走 `v{zero_v}` + 立即偏移，不进寄存器）；
+    * **真实内核**：`compiler/examples/vt_scatter.kkl`（64×65 分块转置，行主序的
+      V 转置写进 `Vt [dim, max_len]`）与 NumPy 逐位对账——这是解码注意力
+      `append` 的路径，之前靠主机逐列转置。
+    """
+    n = 64
+    x = np.arange(n, dtype=np.float32)
+    cases = [
+        ("rev", "lane 反向（varying 下标）",
+         """
+def rev(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    sm = lds(64)
+    if i < n:
+        sm[i & 63] = x[i]
+    barrier()
+    if i < n:
+        y[i] = sm[(63 - i) & 63]
+""",
+         lambda a: a[::-1].copy()),
+        ("sum64", "一个 lane 求和（uniform 下标）",
+         """
+def sum64(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    sm = lds(64)
+    if i < n:
+        sm[i] = x[i]
+    barrier()
+    if i == 0:
+        a = 0.0
+        for j in range(0, 64):
+            a = a + sm[j]
+        y[0] = a
+""",
+         # 只有 y[0] 被写，其余保持 0（内核不变的那部分也要对上）
+         lambda a: np.concatenate([[a.sum()], np.zeros(len(a) - 1,
+                                                   np.float32)])),
+    ]
+    for fn_name, title, src, ref_fn in cases:
+        h = compile_source(src, out_dir, fn_name)[0]
+        o = run_one(h, fn_name,
+                    [{"buffer": "x"}, {"buffer": "y"},
+                     {"scalar": {"dtype": "u32", "value": n}}],
+                    {"x": {"dtype": "f32", "values": x.tolist()},
+                     "y": {"dtype": "f32", "values": [0.0] * n}},
+                    grid=n, workgroup=64)
+        got = np.array(o["y"], np.float32)
+        ref = np.asarray(ref_fn(x), np.float32)
+        d = float(np.abs(got - ref).max())
+        assert d < 1e-5, f"{title}: max_abs={d} got={got[:4]} ref={ref[:4]}"
+
+    # ---- 真实内核：vt_scatter_k（V 行主序 → Vt 转置）----
+    import json as _json
+    h = compile_file(ROOT / "compiler/examples/vt_scatter.kkl", out_dir,
+                     "vt_scatter_k")[0]
+    cat = _json.loads((out_dir / "vt_scatter_k.catalog.json").read_text())
+    assert cat["kernels"][0]["group_segment"] == 64 * 65 * 4, cat["kernels"][0]
+    for rows, dim, y0, max_len in ((1, 128, 0, 256), (1, 128, 7, 256),
+                                   (64, 128, 0, 256), (100, 128, 3, 256),
+                                   (200, 256, 0, 256), (64, 64, 0, 128)):
+        cshift = (dim // 64).bit_length() - 1
+        ntile = ((rows + 63) // 64) * (dim // 64)
+        rng = np.random.default_rng(rows + dim + y0)
+        v = rng.standard_normal((rows, dim)).astype(np.float32)
+        vt = np.full((dim, max_len), -7.0, np.float32)
+        o = run_one(h, "vt_scatter_k",
+                    [{"buffer": "vt"}, {"buffer": "v"},
+                     {"scalar": {"dtype": "u32", "value": rows}},
+                     {"scalar": {"dtype": "u32", "value": dim}},
+                     {"scalar": {"dtype": "u32", "value": dim}},
+                     {"scalar": {"dtype": "u32", "value": max_len}},
+                     {"scalar": {"dtype": "u32", "value": y0}},
+                     {"scalar": {"dtype": "u32", "value": cshift}}],
+                    {"vt": {"dtype": "f32", "values": vt.reshape(-1).tolist()},
+                     "v": {"dtype": "f32", "values": v.reshape(-1).tolist()}},
+                    grid=ntile * 64, workgroup=64)
+        got = np.array(o["vt"], np.float32).reshape(dim, max_len)
+        ref = vt.copy()
+        ref[:, y0:y0 + rows] = v.T
+        assert np.array_equal(got, ref), f"vt_scatter rows={rows} dim={dim} y0={y0}"
+
+    # ---- 报错路径 ----
+    bad_srcs = [
+        ("lds 尺寸不是常量",
+         "def bad(x: ptr[f32], y: ptr[f32], n: u32):\n"
+         "    sm = lds(n)\n", "整数字面量"),
+        ("字面量下标越界",
+         "def bad(x: ptr[f32], y: ptr[f32], n: u32):\n"
+         "    sm = lds(8)\n"
+         "    y[0] = sm[8]\n", "越界"),
+        ("共享内存超 64 KB",
+         "def bad(x: ptr[f32], y: ptr[f32], n: u32):\n"
+         "    sm = lds(20000)\n", "共享内存"),
+        ("barrier 当表达式",
+         "def bad(x: ptr[f32], y: ptr[f32], n: u32):\n"
+         "    v = barrier()\n", "语句"),
+    ]
+    for title, src, word in bad_srcs:
+        try:
+            compile_source(src, out_dir, "bad")
+            raise AssertionError(f"{title}: 应当报错")
+        except Exception as exc:                       # noqa: BLE001
+            assert word in str(exc), f"{title}: {exc}"
+    print("共享内存（LDS）：lane 反向 / uniform 求和 / vt_scatter 6 组 + 4 类报错 ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -770,6 +883,7 @@ def main() -> int:
     check_uniform_region_assign(out)
     check_mixed_types(out)
     check_transcendental_hazards(out)
+    check_lds(out)
     return 0
 
 

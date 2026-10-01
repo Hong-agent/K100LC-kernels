@@ -1,0 +1,36 @@
+# V 的「行主序 → 转置写入 KV 缓存」：vt[d*ystride + y0 + t] = v[t*vstride + d]
+#
+# 解码注意力要把 V 存成 Vt [dim, max_len]（这样 out = Vt·P 就是标准 GEMV）。
+# 原来这条路在主机上转置：每次 append 一次 download + dim 次 upload，实测
+# 2.12 ms/次（dim=128、rows=1）。这里用共享内存做 64x64 分块转置，读、写两个
+# 方向都连续，一次 append 只要一个 kernel。
+#
+#   sm[t*65 + lane] = v[(r0+t)*vstride + c0 + lane]    # 读连续
+#   barrier()
+#   vt[(c0+d)*ystride + y0 + r0 + lane] = sm[lane*65 + d]   # 写连续
+#
+# 每行多出来的那 1 个元素是填充：读回来时相邻 lane 差 65 个字，65 % 32 == 1，
+# 正好错开 bank；不填充的话 64 个字一行、所有 lane 撞同一个 bank（32 路冲突）。
+#
+# grid = ceil(rows/64) * (dim/64)，cshift = log2(dim/64)；要求 dim % 64 == 0
+# 且 dim/64 是 2 的幂（本模型 dim = 64/128/256 都满足）。
+def vt_scatter_k(vt: ptr[f32], v: ptr[f32], rows: u32, dim: u32, vstride: u32,
+                 ystride: u32, y0: u32, cshift: u32):
+    blk = bid()
+    ln = lane()
+    ct = 1 << cshift
+    rt = blk >> cshift
+    cb = blk & (ct - 1)
+    r0 = rt << 6
+    c0 = cb << 6
+    sm = lds(64 * 65)
+    for t in range(0, 64):
+        r = r0 + t
+        if r < rows:
+            sm[t * 65 + ln] = v[r * vstride + c0 + ln]
+    barrier()
+    for d in range(0, 64):
+        c = c0 + d
+        if (r0 + ln) < rows:
+            if c < dim:
+                vt[c * ystride + y0 + r0 + ln] = sm[ln * 65 + d]

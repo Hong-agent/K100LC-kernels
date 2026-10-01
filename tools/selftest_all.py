@@ -1205,6 +1205,30 @@ def t_gemv_f32_rows8_split(ctx: Ctx):
     return judge(np.abs(got - ref).max(), ref)
 
 
+@case("attn", "vt_scatter_k")
+def t_vt_scatter(ctx: Ctx):
+    """V 行主序 → `Vt [dim, max_len]` 转置（**编译器 + DSL 共享内存**生成的核）。
+
+    `(vt, v, rows, dim, vstride, ystride, y0, cshift)`；workgroup = 64 lane，
+    LDS = 64×65 个 f32（每行 +1 是填充，避免 32 路 bank 冲突），
+    grid = `ceil(rows/64) * (dim/64)`、`cshift = log2(dim/64)`。
+    语义：`vt[d*ystride + y0 + t] = v[t*vstride + d]`，只动 `[y0, y0+rows)` 这几列。
+    """
+    rows, dim, max_len, y0 = 100, 128, 256, 3
+    cshift = (dim // 64).bit_length() - 1
+    ntile = ((rows + 63) // 64) * (dim // 64)
+    rng = np.random.default_rng(140)
+    v = rng.standard_normal((rows, dim)).astype(np.float32)
+    vt = np.full((dim, max_len), -7.0, np.float32)
+    pvt = ctx.buf(vt)
+    ctx.launch("vt_scatter_k", ntile, 64,
+               [pvt, ctx.buf(v), rows, dim, dim, max_len, y0, cshift])
+    got = ctx.get(pvt, dim * max_len).reshape(dim, max_len)
+    ref = vt.copy()
+    ref[:, y0:y0 + rows] = v.T
+    return judge(float(np.abs(got - ref).max()), np.array([1.0], np.float32))
+
+
 @case("attn", "attn_pv_part")
 def t_attn_pv(ctx: Ctx):
     """`out[d] = Σ_j P[j]·Vt[d,j]` 的分块版（编译器生成的核）。

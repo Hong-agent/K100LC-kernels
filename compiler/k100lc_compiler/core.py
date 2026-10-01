@@ -39,6 +39,36 @@ def _align(n: int, a: int) -> int:
     return (n + a - 1) // a * a
 
 
+def _const_int(node) -> int | None:
+    """把只由整数字面量组成的表达式折成 int（`lds(64 * 65)` 要能用）。
+
+    Python 的 AST 不做常量折叠，所以这里自己认 `+ - * << >>` 与括号。
+    不是常量就返回 None，由调用方报错。
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) \
+            and not isinstance(node.value, bool):
+        return int(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        v = _const_int(node.operand)
+        return None if v is None else -v
+    if isinstance(node, ast.BinOp):
+        a, b = _const_int(node.left), _const_int(node.right)
+        if a is None or b is None:
+            return None
+        op = node.op
+        if isinstance(op, ast.Add):
+            return a + b
+        if isinstance(op, ast.Sub):
+            return a - b
+        if isinstance(op, ast.Mult):
+            return a * b
+        if isinstance(op, ast.LShift):
+            return a << b
+        if isinstance(op, ast.RShift):
+            return a >> b
+    return None
+
+
 def _ty_name(node) -> str:
     """解析注解：'ptr[f32]' / Name('u32') / Str。"""
     if isinstance(node, ast.Str):
@@ -114,6 +144,11 @@ class CodeGen:
         self.varying_regions: list[int] = []
         self.region_n = 0
         self.var_region: dict[str, int | None] = {}   # 变量是在哪个 varying 区里建的
+        # workgroup 共享内存（LDS）：`sm = lds(64)` 声明一个 f32 数组，
+        # `sm[i]` / `sm[i] = v` 走 `ds_read_b32` / `ds_write_b32`，跨 lane 交换
+        # 数据要用 `barrier()`。名字 → (字节偏移, 元素个数)。
+        self.lds_arrays: dict[str, tuple[int, int]] = {}
+        self.lds_bytes = 0
         self.zero_v = 1
         self.label_n = 0
         self._parse_params()
@@ -164,6 +199,10 @@ class CodeGen:
 
         for node in ast.walk(self.fn):
             if isinstance(node, ast.Assign):
+                if (len(node.targets) == 1 and isinstance(node.value, ast.Call)
+                        and isinstance(node.value.func, ast.Name)
+                        and node.value.func.id == "lds"):
+                    continue          # 共享内存声明，不占 VGPR
                 for t in node.targets:
                     if isinstance(t, ast.Name):
                         take(t.id)
@@ -667,6 +706,12 @@ class CodeGen:
         if not isinstance(node.func, ast.Name):
             raise CompileError("只支持简单函数调用")
         n = node.func.id
+        if n == "lds":
+            raise CompileError(
+                "lds(n) 只能当声明语句用（`sm = lds(64)`），不能出现在表达式里")
+        if n in ("barrier", "lds_barrier"):
+            raise CompileError(
+                "barrier() 只能当语句用（独占一行），不能出现在表达式里")
         if n == "gid":
             return self._gid()
         if n == "load16":
@@ -867,6 +912,8 @@ class CodeGen:
     def load(self, node: ast.Subscript) -> Val:
         if not isinstance(node.value, ast.Name):
             raise CompileError("只支持 base[index]")
+        if node.value.id in self.lds_arrays:
+            return self.lds_load(node.value.id, node.slice)
         ptr = self.env.get(node.value.id)
         if ptr is None or ptr.kind != "ptr":
             raise CompileError(f"{node.value.id} 不是指针")
@@ -889,6 +936,9 @@ class CodeGen:
     def store(self, node: ast.Subscript, value: Val) -> None:
         if not isinstance(node.value, ast.Name):
             raise CompileError("只支持 base[index]")
+        if node.value.id in self.lds_arrays:
+            self.lds_store(node.value.id, node.slice, value)
+            return
         ptr = self.env.get(node.value.id)
         if ptr is None or ptr.kind != "ptr":
             raise CompileError(f"{node.value.id} 不是指针")
@@ -923,6 +973,11 @@ class CodeGen:
             if len(node.targets) != 1:
                 raise CompileError("只支持单赋值")
             target = node.targets[0]
+            if self._is_lds_decl(node.value):
+                if not isinstance(target, ast.Name):
+                    raise CompileError("lds(...) 只能赋给一个名字")
+                self._declare_lds(target.id, node.value)
+                return
             val = self.expr(node.value)
             if isinstance(target, ast.Name):
                 self._assign_name(target.id, val)
@@ -975,8 +1030,73 @@ class CodeGen:
             self.emit(f"s_branch {self.loop_stack[-1][0]}")
         elif isinstance(node, ast.Pass):
             return
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            fn = getattr(node.value.func, "id", None)
+            if fn in ("barrier", "lds_barrier"):
+                if node.value.args:
+                    raise CompileError("barrier() 不接受参数")
+                # LDS 写入要先落地，再让所有 lane 在屏障上对齐
+                self.emit("s_waitcnt lgkmcnt(0)")
+                self.emit("s_barrier")
+                return
+            raise CompileError(f"不支持的表达式语句 {fn or type(node.value).__name__}()")
         else:
             raise CompileError(f"不支持的语句 {type(node).__name__}")
+
+    # ---------------- 共享内存（LDS） ----------------
+    def _is_lds_decl(self, node) -> bool:
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "lds")
+
+    def _declare_lds(self, name: str, node: ast.Call) -> None:
+        """`sm = lds(n)`：给这个名字分一段 workgroup 共享内存（f32 槽）。"""
+        if name in self.lds_arrays or name in self.env:
+            raise CompileError(f"{name}: 名字已被占用")
+        if len(node.args) != 1:
+            raise CompileError("lds(n) 只接受一个参数")
+        cnt = _const_int(node.args[0])
+        if cnt is None:
+            raise CompileError("lds(n) 的 n 必须是整数字面量（编译期就要定尺寸）")
+        if cnt <= 0:
+            raise CompileError("lds(n) 的 n 必须为正")
+        off = _align(self.lds_bytes, 16)      # 每个数组 16 字节对齐（便于将来 dwordx4）
+        if off + 4 * cnt > 65536:
+            raise CompileError(
+                f"{name}: 共享内存超了（要 {off + 4 * cnt} B，卡上每 workgroup "
+                f"最多 64 KB）；已经用了 {self.lds_bytes} B")
+        self.lds_arrays[name] = (off, cnt)
+        self.lds_bytes = off + 4 * cnt
+
+    def _lds_addr(self, name: str, index_node) -> tuple[int, int, int, Val]:
+        """返回 `(vaddr_reg, 立即偏移, 元素个数, 索引值)`；索引是字面量时用
+        `v{zero_v}` + 立即偏移，省掉一条移位。"""
+        off, cnt = self.lds_arrays[name]
+        idx = self.expr(index_node)
+        if idx.kind == "lit":
+            i = int(idx.value)
+            if not 0 <= i < cnt:
+                raise CompileError(
+                    f"{name}[{i}]: 下标越界（{name} 只有 {cnt} 个元素）")
+            return self.zero_v, off + 4 * i, cnt, idx
+        a = self.as_vreg(idx)
+        r = self.alloc_tmp_v()
+        self.emit(f"v_lshlrev_b32_e32 v{r}, 2, v{a}")
+        self._release(idx)
+        return r, off, cnt, idx
+
+    def lds_load(self, name: str, index_node) -> Val:
+        vaddr, off, _cnt, _idx = self._lds_addr(name, index_node)
+        dst = self.alloc_tmp_v()
+        self.emit(f"ds_read_b32 v{dst}, v{vaddr} offset:{off}")
+        self.emit("s_waitcnt lgkmcnt(0)")
+        return Val("v", dst, "f32")
+
+    def lds_store(self, name: str, index_node, value: Val) -> None:
+        val = self._f32_operand(value)       # `sm[i] = 1` 要当 1.0
+        src = self.as_vreg(val)
+        vaddr, off, _cnt, _idx = self._lds_addr(name, index_node)
+        self.emit(f"ds_write_b32 v{vaddr}, v{src} offset:{off}")
+        self._release(value)
 
     def _assign_name(self, name: str, val: Val, force_ty: str | None = None) -> None:
         """给局部变量赋值。
@@ -1184,6 +1304,11 @@ class CodeGen:
     def sgpr_count(self) -> int:
         return max(self.max_s + 1, 8)
 
+    @property
+    def group_segment(self) -> int:
+        """workgroup 共享内存字节数（LDS 分配粒度 256 B）。"""
+        return _align(self.lds_bytes, 256) if self.lds_bytes else 0
+
 
 def compile_source(source: str, out_dir: pathlib.Path, only: str | None = None) -> list[pathlib.Path]:
     tree = ast.parse(source)
@@ -1205,7 +1330,7 @@ def compile_source(source: str, out_dir: pathlib.Path, only: str | None = None) 
             "name": fn.name, "code": code, "args": args,
             "kernarg_size": ksize, "kernarg_align": 8,
             "sgpr_count": cg.sgpr_count, "vgpr_count": cg.vgpr_count,
-            "group_segment": 0, "private_segment": 0,
+            "group_segment": cg.group_segment, "private_segment": 0,
         }
         elf = build_elf([kernel])
         h_path = out_dir / f"{fn.name}.hsaco"
@@ -1214,7 +1339,8 @@ def compile_source(source: str, out_dir: pathlib.Path, only: str | None = None) 
         (out_dir / f"{fn.name}.catalog.json").write_text(_json.dumps(
             {"version": 1, "kernels": [{
                 "name": fn.name, "lookup": fn.name, "args": args,
-                "kernarg_size": ksize, "group_segment": 0, "private_segment": 0}]},
+                "kernarg_size": ksize, "group_segment": cg.group_segment,
+                "private_segment": 0}]},
             ensure_ascii=False, indent=1), encoding="utf-8")
         outputs.append(h_path)
     return outputs

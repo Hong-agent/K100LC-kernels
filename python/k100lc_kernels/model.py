@@ -764,9 +764,12 @@ class Attention:
         off = self.length
         self.rt.copy_dev(self.k + off * self.dim * 4, int(k_dev),
                          rows * self.dim * 4)
-        v = self.rt.download(int(v_dev), rows * self.dim, np.float32) \
-            .reshape(rows, self.dim)
-        self._store_vt(v, off, rows)
+        if self._use_vt_scatter():
+            self._vt_scatter_device(int(v_dev), off, rows)
+        else:
+            v = self.rt.download(int(v_dev), rows * self.dim, np.float32) \
+                .reshape(rows, self.dim)
+            self._store_vt(v, off, rows)
         self.length += rows
 
     def append(self, k: np.ndarray, v: np.ndarray) -> None:
@@ -777,10 +780,37 @@ class Attention:
             raise ValueError(f"KV 溢出：{self.length}+{rows} > {self.max_len}")
         off = self.length
         self.rt.upload(self.k + off * self.dim * 4, k.reshape(-1))
-        self._store_vt(v, off, rows)
+        if self._use_vt_scatter():
+            # 只上传一次 V（行主序），转置交给设备侧的 vt_scatter_k
+            pv = self.ws.buffer(self.tag + ".vrow", rows * self.dim * 4)
+            self.rt.upload(pv, v.reshape(-1))
+            self._vt_scatter_device(pv, off, rows)
+        else:
+            self._store_vt(v, off, rows)
         self.length += rows
 
+    def _use_vt_scatter(self) -> bool:
+        """`vt_scatter_k`（编译器生成的 LDS 分块转置）能不能用。
+
+        `dim/64` 必须是 2 的幂（内核按 `blk >> cshift` 切列 tile）。
+        """
+        return (self.dim % 64 == 0 and (self.dim // 64) & (self.dim // 64 - 1) == 0
+                and self.rt.has("vt_scatter_k"))
+
+    def _vt_scatter_device(self, v_dev: int, off: int, rows: int) -> None:
+        """设备侧转置：`vt[d*max_len + off + t] = v[t*dim + d]`（一个 kernel）。
+
+        以前这里是「download → numpy 转置 → dim 次 upload」，dim=128、rows=1 时
+        实测 **2.12 ms/次**（128 次 4 字节上传），比一次注意力前向还贵三个量级。
+        """
+        ntile = cdiv(rows, 64) * (self.dim // 64)
+        cshift = (self.dim // 64).bit_length() - 1
+        self.rt.launch("vt_scatter_k", ntile, 64,
+                       [self.vt, int(v_dev), int(rows), self.dim, self.dim,
+                        self.max_len, int(off), cshift])
+
     def _store_vt(self, v: np.ndarray, off: int, rows: int) -> None:
+        """兜底（hsaco 里没有 `vt_scatter_k` 时）：主机侧逐列转置上传。"""
         buf = np.empty(rows, dtype=np.float32)
         for d in range(self.dim):
             np.copyto(buf, v[:, d])

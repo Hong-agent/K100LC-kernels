@@ -51,6 +51,17 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
     同一个 varying 区里（`q4k/q5k/q6k_dequant` 就是这么写的）。
   * `break` / `continue` 不能出现在 varying 区的 `if` 里：分支是标量指令，
     会把**所有** lane 一起跳出/跳回（同样是 v1.8.2 起直接报错）。
+  * **workgroup 共享内存（LDS）**：`sm = lds(n)` 声明 `n` 个 f32 槽（编译期
+    定尺寸，可以写算式如 `lds(64 * 65)`），`sm[i]` / `sm[i] = v` 发
+    `ds_read_b32` / `ds_write_b32`，`barrier()` 发 `s_waitcnt lgkmcnt(0)` +
+    `s_barrier`（跨 lane 交换数据必须先写、再 `barrier()`、再读）。
+    生成的 HSACO 会按实际用量声明 `group_segment`（256 B 对齐，上限 64 KB）。
+    字面量下标折进 `ds_*` 的 16 位立即偏移，动态下标才花一条移位。
+    * 例子：`compiler/examples/vt_scatter.kkl`（64×65 分块转置，每行 +1 填充
+      把 64 路 bank 冲突拆成无冲突；实测把解码注意力的 V 转置从 2.12 ms/次
+      降到 0.13 ms/次）。
+    * 报错都很直接：`lds(动态表达式)`、字面量下标越界、总量超 64 KB、
+      `barrier()` 当表达式用。
 * 条件：比较、`and` / `or`（非短路——DSL 表达式无副作用，两侧都求值后把掩码
   在 vcc 里按位合并；uniform 与 varying 条件可以混用）
 * 内存：`buf[index]` load/store，下标可以是 varying 表达式

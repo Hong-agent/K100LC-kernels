@@ -266,6 +266,20 @@ def g_attn(s: Sweep, rng) -> None:
                   0 if rel < 1e-5 else 1,
                   f"max_rel={rel:.2e}")
             attn.ws.free()
+    # V → Vt 的分块转置（编译器 + DSL 共享内存生成的核）：rows 跨 64 边界、y0 非零
+    for rows, dim, y0 in ((1, 128, 0), (1, 128, 5), (63, 128, 0), (64, 128, 9),
+                          (65, 128, 0), (130, 256, 3), (256, 64, 0)):
+        max_len = 512
+        cshift = (dim // 64).bit_length() - 1
+        v = rng.standard_normal((rows, dim)).astype(np.float32)
+        vt = np.full((dim, max_len), -7.0, np.float32)
+        pvt = s.buf(vt)
+        s.run("vt_scatter_k", ((rows + 63) // 64) * (dim // 64), 64,
+              [pvt, s.buf(v), rows, dim, dim, max_len, y0, cshift])
+        ref = vt.copy()
+        ref[:, y0:y0 + rows] = v.T
+        check(s, f"vt_scatter rows={rows} dim={dim} y0={y0}",
+              int((s.get(pvt, dim * max_len).reshape(dim, max_len) != ref).sum()))
 
 
 GROUPS = {
