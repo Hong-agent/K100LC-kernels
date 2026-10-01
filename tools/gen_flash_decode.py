@@ -77,7 +77,64 @@ def gen_part_asm() -> str:
     grid = `n_heads << cshift`；`head = blk >> cshift`、
     `split = blk & ((1<<cshift)-1)`、`R = pad >> cshift`（每段行数，64 的倍数）。
     LDS：`R` 个 f32 分数（第二趟就地改成 p）+ 归约槽（`R*4` 起，64 lane × 4 B）。
+
+    v1.9.8：第一趟（d 循环）和第三趟（j 循环）的批量宽度从 4 放宽到 8——每个
+    lane 一次发出的在途 load 翻倍，`s_waitcnt vmcnt(0)` 的条数减半。实测这两条
+    等待各占整核的 ~10%（见 CHANGELOG 1.9.7 的分相账）。
     """
+    dbatch = 8                     # 第一趟：一次发 dbatch 个 d 的 kt/q
+    jbatch = 8                     # 第四趟：一次发 jbatch 个 j 的 p/v
+    KT0 = 44                       # kt / v 的载入目标基址
+    QT0 = KT0 + dbatch             # q 的载入目标基址（= 48，和原来的 4 宽一致）
+    DT = KT0 + 2 * dbatch          # d 的临时寄存器（= 52，原来的 v52）
+
+    def d_elt(k: int) -> list[str]:
+        """第一趟里第 k 个 d 的 (kt 读, q 读)。k=0 时顺带把 d 放进 v{DT}。"""
+        if k == 0:
+            pre_kt = [f"v_mov_b32_e32 v{DT}, s37"]
+            mul = f"v_mul_lo_u32 v22, v{DT}, s31"
+            pre_q = [f"v_lshlrev_b32_e32 v26, 2, v{DT}"]
+        else:
+            pre_kt = [f"v_add_u32_e32 v22, {k}, v{DT}"]
+            mul = "v_mul_lo_u32 v22, v22, s31"
+            pre_q = [f"v_add_u32_e32 v26, {k}, v{DT}",
+                     "v_lshlrev_b32_e32 v26, 2, v26"]
+        return pre_kt + [
+            mul,
+            "v_add_u32_e32 v22, v22, v21",
+            "v_lshlrev_b32_e32 v22, 2, v22",
+            "v_mov_b32_e32 v23, v8",
+            "v_mov_b32_e32 v24, v9",
+            "v_add_co_u32_e32 v23, vcc, v23, v22",
+            "v_addc_co_u32_e32 v24, vcc, v24, v1, vcc",
+            f"global_load_dword v{KT0 + k}, v[23:24], off",
+            *pre_q,
+            "v_mov_b32_e32 v27, v12",
+            "v_mov_b32_e32 v28, v13",
+            "v_add_co_u32_e32 v27, vcc, v27, v26",
+            "v_addc_co_u32_e32 v28, vcc, v28, v1, vcc",
+            f"global_load_dword v{QT0 + k}, v[27:28], off",
+        ]
+
+    def j_elt(k: int) -> list[str]:
+        """第四趟里第 k 个 j 的 (LDS 读 p, global 读 v)。"""
+        head = (["v_mov_b32_e32 v42, s37"] if k == 0 else
+                ["v_mov_b32_e32 v52, s37", f"v_add_u32_e32 v42, {k}, v52"])
+        return head + [
+            "v_lshlrev_b32_e32 v24, 2, v42",
+            "ds_read_b32 v53, v24",
+            "v_add_u32_e32 v25, v5, v42",
+            "v_mul_lo_u32 v25, v25, s39",
+            "v_add_u32_e32 v25, v25, v22",
+            "v_lshlrev_b32_e32 v25, 2, v25",
+            "v_mov_b32_e32 v26, v10",
+            "v_mov_b32_e32 v27, v11",
+            "v_add_co_u32_e32 v26, vcc, v26, v25",
+            "v_addc_co_u32_e32 v27, vcc, v27, v1, vcc",
+            f"global_load_dword v{KT0 + k}, v[26:27], off",
+            f"ds_read_b32 v{54 + k}, v24",
+        ]
+
     L: list[str] = [
         ".text", f"k_{PART_NAME}:",
         "s_load_dwordx2 s[16:17], s[4:5], 0x0",     # po
@@ -177,78 +234,13 @@ def gen_part_asm() -> str:
         # 不批量的话每个 d 都要一趟完整访存往返：4 个 workgroup 的小 case 实测
         # 181 us（128 个 d × 0.5 us 的纯延迟）。
         "L_d4:",
-        "s_add_i32 s41, s37, 4",
+        f"s_add_i32 s41, s37, {dbatch}",
         "s_cmp_lt_u32 s41, s29",
         "s_cbranch_scc0 L_d1",
-        "v_mov_b32_e32 v52, s37",                   # d（VGPR 版，别用 v44：那是载入目标）
-        "v_mul_lo_u32 v22, v52, s31",
-        "v_add_u32_e32 v22, v22, v21",
-        "v_lshlrev_b32_e32 v22, 2, v22",
-        "v_mov_b32_e32 v23, v8",
-        "v_mov_b32_e32 v24, v9",
-        "v_add_co_u32_e32 v23, vcc, v23, v22",
-        "v_addc_co_u32_e32 v24, vcc, v24, v1, vcc",
-        "global_load_dword v44, v[23:24], off",
-        "v_lshlrev_b32_e32 v26, 2, v52",
-        "v_mov_b32_e32 v27, v12",
-        "v_mov_b32_e32 v28, v13",
-        "v_add_co_u32_e32 v27, vcc, v27, v26",
-        "v_addc_co_u32_e32 v28, vcc, v28, v1, vcc",
-        "global_load_dword v48, v[27:28], off",
-        "v_add_u32_e32 v22, 1, v52",
-        "v_mul_lo_u32 v22, v22, s31",
-        "v_add_u32_e32 v22, v22, v21",
-        "v_lshlrev_b32_e32 v22, 2, v22",
-        "v_mov_b32_e32 v23, v8",
-        "v_mov_b32_e32 v24, v9",
-        "v_add_co_u32_e32 v23, vcc, v23, v22",
-        "v_addc_co_u32_e32 v24, vcc, v24, v1, vcc",
-        "global_load_dword v45, v[23:24], off",
-        "v_add_u32_e32 v26, 1, v52",
-        "v_lshlrev_b32_e32 v26, 2, v26",
-        "v_mov_b32_e32 v27, v12",
-        "v_mov_b32_e32 v28, v13",
-        "v_add_co_u32_e32 v27, vcc, v27, v26",
-        "v_addc_co_u32_e32 v28, vcc, v28, v1, vcc",
-        "global_load_dword v49, v[27:28], off",
-        "v_add_u32_e32 v22, 2, v52",
-        "v_mul_lo_u32 v22, v22, s31",
-        "v_add_u32_e32 v22, v22, v21",
-        "v_lshlrev_b32_e32 v22, 2, v22",
-        "v_mov_b32_e32 v23, v8",
-        "v_mov_b32_e32 v24, v9",
-        "v_add_co_u32_e32 v23, vcc, v23, v22",
-        "v_addc_co_u32_e32 v24, vcc, v24, v1, vcc",
-        "global_load_dword v46, v[23:24], off",
-        "v_add_u32_e32 v26, 2, v52",
-        "v_lshlrev_b32_e32 v26, 2, v26",
-        "v_mov_b32_e32 v27, v12",
-        "v_mov_b32_e32 v28, v13",
-        "v_add_co_u32_e32 v27, vcc, v27, v26",
-        "v_addc_co_u32_e32 v28, vcc, v28, v1, vcc",
-        "global_load_dword v50, v[27:28], off",
-        "v_add_u32_e32 v22, 3, v52",
-        "v_mul_lo_u32 v22, v22, s31",
-        "v_add_u32_e32 v22, v22, v21",
-        "v_lshlrev_b32_e32 v22, 2, v22",
-        "v_mov_b32_e32 v23, v8",
-        "v_mov_b32_e32 v24, v9",
-        "v_add_co_u32_e32 v23, vcc, v23, v22",
-        "v_addc_co_u32_e32 v24, vcc, v24, v1, vcc",
-        "global_load_dword v47, v[23:24], off",
-        "v_add_u32_e32 v26, 3, v52",
-        "v_lshlrev_b32_e32 v26, 2, v26",
-        "v_mov_b32_e32 v27, v12",
-        "v_mov_b32_e32 v28, v13",
-        "v_add_co_u32_e32 v27, vcc, v27, v26",
-        "v_addc_co_u32_e32 v28, vcc, v28, v1, vcc",
-        "global_load_dword v51, v[27:28], off",
+        *[x for k in range(dbatch) for x in d_elt(k)],
         "s_waitcnt vmcnt(0)",
-        "v_fma_f32 v20, v44, v48, v20",
-        "v_fma_f32 v20, v45, v49, v20",
-        "v_fma_f32 v20, v46, v50, v20",
-        "v_fma_f32 v20, v47, v51, v20",
-        "s_add_i32 s37, s37, 4",
+        *[f"v_fma_f32 v20, v{KT0 + k}, v{QT0 + k}, v20" for k in range(dbatch)],
+        f"s_add_i32 s37, s37, {dbatch}",
         "s_branch L_d4",
         # ---- 收尾：剩下不到 4 个的单拍循环 ----
         "L_d1:", "s_cmp_lt_u32 s37, s29",
@@ -388,70 +380,13 @@ def gen_part_asm() -> str:
         "s_mov_b32 s37, 0",                         # j
         # 同样一次发 4 个 j（4 条 LDS 读 p + 4 条 global 读 v），只等一次
         "L_j4:",
-        "s_add_i32 s41, s37, 4",
+        f"s_add_i32 s41, s37, {jbatch}",
         "s_cmp_lt_u32 s41, s46",
         "s_cbranch_scc0 L_j",
-        "v_mov_b32_e32 v42, s37",
-        "v_lshlrev_b32_e32 v24, 2, v42",
-        "ds_read_b32 v53, v24",
-        "v_add_u32_e32 v25, v5, v42",
-        "v_mul_lo_u32 v25, v25, s39",
-        "v_add_u32_e32 v25, v25, v22",
-        "v_lshlrev_b32_e32 v25, 2, v25",
-        "v_mov_b32_e32 v26, v10",
-        "v_mov_b32_e32 v27, v11",
-        "v_add_co_u32_e32 v26, vcc, v26, v25",
-        "v_addc_co_u32_e32 v27, vcc, v27, v1, vcc",
-        "global_load_dword v44, v[26:27], off",
-        "ds_read_b32 v54, v24",
-        "v_mov_b32_e32 v52, s37",
-        "v_add_u32_e32 v42, 1, v52",
-        "v_lshlrev_b32_e32 v24, 2, v42",
-        "ds_read_b32 v53, v24",
-        "v_add_u32_e32 v25, v5, v42",
-        "v_mul_lo_u32 v25, v25, s39",
-        "v_add_u32_e32 v25, v25, v22",
-        "v_lshlrev_b32_e32 v25, 2, v25",
-        "v_mov_b32_e32 v26, v10",
-        "v_mov_b32_e32 v27, v11",
-        "v_add_co_u32_e32 v26, vcc, v26, v25",
-        "v_addc_co_u32_e32 v27, vcc, v27, v1, vcc",
-        "global_load_dword v45, v[26:27], off",
-        "ds_read_b32 v55, v24",
-        "v_mov_b32_e32 v52, s37",
-        "v_add_u32_e32 v42, 2, v52",
-        "v_lshlrev_b32_e32 v24, 2, v42",
-        "ds_read_b32 v53, v24",
-        "v_add_u32_e32 v25, v5, v42",
-        "v_mul_lo_u32 v25, v25, s39",
-        "v_add_u32_e32 v25, v25, v22",
-        "v_lshlrev_b32_e32 v25, 2, v25",
-        "v_mov_b32_e32 v26, v10",
-        "v_mov_b32_e32 v27, v11",
-        "v_add_co_u32_e32 v26, vcc, v26, v25",
-        "v_addc_co_u32_e32 v27, vcc, v27, v1, vcc",
-        "global_load_dword v46, v[26:27], off",
-        "ds_read_b32 v56, v24",
-        "v_mov_b32_e32 v52, s37",
-        "v_add_u32_e32 v42, 3, v52",
-        "v_lshlrev_b32_e32 v24, 2, v42",
-        "ds_read_b32 v53, v24",
-        "v_add_u32_e32 v25, v5, v42",
-        "v_mul_lo_u32 v25, v25, s39",
-        "v_add_u32_e32 v25, v25, v22",
-        "v_lshlrev_b32_e32 v25, 2, v25",
-        "v_mov_b32_e32 v26, v10",
-        "v_mov_b32_e32 v27, v11",
-        "v_add_co_u32_e32 v26, vcc, v26, v25",
-        "v_addc_co_u32_e32 v27, vcc, v27, v1, vcc",
-        "global_load_dword v47, v[26:27], off",
-        "ds_read_b32 v57, v24",
+        *[x for k in range(jbatch) for x in j_elt(k)],
         "s_waitcnt vmcnt(0)",
-        "v_fma_f32 v23, v44, v54, v23",
-        "v_fma_f32 v23, v45, v55, v23",
-        "v_fma_f32 v23, v46, v56, v23",
-        "v_fma_f32 v23, v47, v57, v23",
-        "s_add_i32 s37, s37, 4",
+        *[f"v_fma_f32 v23, v{KT0 + k}, v{54 + k}, v23" for k in range(jbatch)],
+        f"s_add_i32 s37, s37, {jbatch}",
         "s_branch L_j4",
         "L_j:", "s_cmp_lt_u32 s37, s46",
         "s_cbranch_scc0 L_j_done",
