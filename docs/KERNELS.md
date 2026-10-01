@@ -2,7 +2,7 @@
 
 本文件由 `tools/gen_kernel_docs.py` 从 [`python/k100lc_kernels/catalog.json`](../python/k100lc_kernels/catalog.json) 自动生成，请勿手工修改。
 
-预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **132 个内核**。
+预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **133 个内核**。
 
 调用方法、grid 语义和完整示例先看 [`docs/KERNEL_CALLING.md`](KERNEL_CALLING.md)。本页只回答「某个 lookup 到底要传哪些参数」。
 
@@ -15,11 +15,11 @@
 | 融合点积（原生量化块 × 激活） | 12 |
 | 量化解码 | 12 |
 | GEMV / GEMM | 5 |
-| Transformer 常用算子 | 22 |
+| Transformer 常用算子 | 23 |
 | Attention / KV / 视觉塔 | 19 |
 | 序列模型 / 卷积 | 6 |
 | 其他 | 6 |
-| **合计** | **132** |
+| **合计** | **133** |
 
 ## 速查表
 
@@ -142,6 +142,7 @@
 | `reduce_sum1_k` | `buf:0:8 buf:8:8 val:16:4` | 24 | 256 | 0 |
 | `rmsnorm_gated_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4` | 296 | 128 | 0 |
 | `rmsnorm_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 296 | 128 | 0 |
+| `rope_apply_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4` | 96 | 0 | 0 |
 | `rope_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4 val:40:4 val:44:4 val:48:4 val:52:4` | 312 | 0 | 0 |
 | `router_top10_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4` | 32 | 0 | 0 |
 | `scale_mul_k` | `buf:0:8 val:8:4 val:16:8` | 280 | 0 | 0 |
@@ -2334,6 +2335,34 @@
 | 16 | 88 | 8 | `hidden_global_offset_y` | 运行时 |
 | 17 | 96 | 8 | `hidden_global_offset_z` | 运行时 |
 | 18 | 104 | 2 | `hidden_grid_dims` | 运行时 |
+
+#### `rope_apply_k`
+
+- mangled 符号：`rope_apply_k`
+- 签名：`rope_apply_k`
+- kernarg：96 B，LDS：0 B，private：0 B
+
+| # | offset | size | kind | 由谁填 |
+|---:|---:|---:|---|---|
+| 0 | 0 | 8 | `global_buffer` | 调用方 |
+| 1 | 8 | 8 | `global_buffer` | 调用方 |
+| 2 | 16 | 8 | `global_buffer` | 调用方 |
+| 3 | 24 | 8 | `global_buffer` | 调用方 |
+| 4 | 32 | 4 | `by_value` | 调用方 |
+| 5 | 36 | 4 | `by_value` | 调用方 |
+| 6 | 40 | 4 | `hidden_block_count_x` | 运行时 |
+| 7 | 44 | 4 | `hidden_block_count_y` | 运行时 |
+| 8 | 48 | 4 | `hidden_block_count_z` | 运行时 |
+| 9 | 52 | 2 | `hidden_group_size_x` | 运行时 |
+| 10 | 54 | 2 | `hidden_group_size_y` | 运行时 |
+| 11 | 56 | 2 | `hidden_group_size_z` | 运行时 |
+| 12 | 58 | 2 | `hidden_remainder_x` | 运行时 |
+| 13 | 60 | 2 | `hidden_remainder_y` | 运行时 |
+| 14 | 62 | 2 | `hidden_remainder_z` | 运行时 |
+| 15 | 64 | 8 | `hidden_global_offset_x` | 运行时 |
+| 16 | 72 | 8 | `hidden_global_offset_y` | 运行时 |
+| 17 | 80 | 8 | `hidden_global_offset_z` | 运行时 |
+| 18 | 88 | 2 | `hidden_grid_dims` | 运行时 |
 
 #### `rope_k`
 

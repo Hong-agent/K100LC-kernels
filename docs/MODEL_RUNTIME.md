@@ -58,8 +58,17 @@ def forward_device(x_dev, rows, sync=False):
 ```
 
 对比「每个 kernel 后 sync 一次」，这样能把每个算子一次的设备同步 + Python
-调度开销省掉。实测一次 launch 的固定开销约 **7 us**（Python + HSA 投递），
-所以层数多、算子碎时收益明显。
+调度开销省掉。v1.8.6 把固定开销逐项量了一遍（各 200 次平均）：
+
+| 动作 | 耗时 |
+|---|---:|
+| `rt.launch`（小内核，16 个 workgroup） | 10.9 us |
+| launch + `sync` | 21.4 us（≈10 us 是 GPU 完成往返） |
+| `upload` / `download` 4 KB | 24.1 / 23.4 us |
+| 空 `sync`（没有在飞的活） | 0.3 us |
+
+所以「numpy 进 / numpy 出」的一次算子约 **80 us**、跟数据量几乎无关，而层数多、
+算子碎时设备侧串联（`forward_device` + 最后一次 `sync`）收益非常明显。
 
 完整 MLP 示例：
 
@@ -260,6 +269,18 @@ cache.append_device(k_dev, v_dev, rows, sync=False)   # k_dev/v_dev 是 [rows,di
 `kv_append_v_k` / `fa_decode_k` 系列，参数见
 [`KERNELS.md`](KERNELS.md) 与 [`KERNEL_CALLING.md`](KERNEL_CALLING.md)。
 
+### 5.0 RoPE：`RoPE`
+
+```python
+rope = RoPE(rt, dim=128, max_len=4096)      # 表 [max_len, dim/2] 一次算好常驻
+y = rope.forward(x, pos=0)                  # x [rows, dim] → [rows, dim]
+y_dev = rope.forward_device(x_dev, rows, pos, sync=False)   # 逐 token 免同步
+```
+
+**rotate-half** 约定（成对的是 `(j, j+dim/2)`，HF Llama / GPT-NeoX），不是 GPT-J
+的交错 `(2j, 2j+1)`。内核 `rope_apply_k` 由本仓库编译器从
+`compiler/examples/rope_apply.kkl` 生成，与 NumPy **逐位相同**。
+
 ### 5.1 解码注意力：`Attention`
 
 `Attention` 是**解码（M=1）**注意力，用**已对账**的内核拼出来，不依赖包里
@@ -335,7 +356,7 @@ W4A8/W4A4 用打包点积指令把解码成本摊掉。
 | 用 `Workspace` 复用中间张量 | 避免逐 token / 逐层 `alloc/free` |
 | 一次 forward 只 `sync` 一次 | 单队列 in-order，逐算子 sync 只是浪费 |
 | 解码 M=1..4 走 GEMV；预填充 M≥128 走 GEMM | W4A4 GEMM 实测 45 TMAC/s，GEMV 是带宽通路 |
-| 减少 launch 次数 | 实测每次 launch 固定开销约 7 us，400 层 × 多次很容易到毫秒级 |
+| 减少 launch 次数 | 实测每次 launch 固定开销约 **11 us**（launch+sync 21 us，小 buffer 上传/下载各 24 us），400 层 × 多次很容易到毫秒级 |
 | 权重量化到 INT4/RT4 | 显存与带宽直接降 4~8 倍；精度换速度 |
 | MoE 用 `ids`/`stride` 一次覆盖多个专家 | 避免逐专家重复启动 |
 | **整段前向只 sync 一次** | 逐层 sync 会把 CPU/GPU 串行；W4A8 17408×5120 实测每层 99.0 us → 81.4 us |

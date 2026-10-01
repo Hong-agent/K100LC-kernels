@@ -39,7 +39,8 @@ from .runtime import Runtime
 __all__ = [
     "cdiv", "div_magic", "Workspace",
     "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
-    "RMSNorm", "SwiGLU", "MLP", "MoECombine", "MoEExperts", "KVCache", "Sampler",
+    "RMSNorm", "SwiGLU", "MLP", "MoECombine", "MoEExperts", "RoPE",
+    "KVCache", "Sampler",
     "Attention",
     "run_sequence", "gemv_f32", "ROWS8_MAX_K", "SPLIT_SOFTMAX_MIN_PAD",
     "SPLITK_VTP",
@@ -919,6 +920,85 @@ class Attention:
         self.rt.upload(self.q, q)
         out = self.forward_device(self.q, n_kv, sync=True)
         return self.rt.download(out, self.dim, np.float32)
+
+
+class RoPE:
+    """旋转位置编码（RoPE，**rotate-half** 约定）：`rope_apply_k` 的运行时封装。
+
+    表按位置预先算好常驻显存（`[max_len, dim/2]` 的 cos / sin），逐 token 只发
+    一个内核，位置由 `pos` 直接指到表里，不用重算：
+
+        theta_j = base ** (-2j/dim)        j = 0..dim/2-1
+        cos[pos, j] = cos(pos * theta_j)   sin[pos, j] = sin(pos * theta_j)
+
+    成对的是 `(j, j + dim/2)`（HF Llama / GPT-NeoX 的 `rotate_half`），不是 GPT-J
+    的交错 `(2j, 2j+1)`：
+
+        y[j]        = x[j]*cos - x[j+half]*sin
+        y[j+half]   = x[j]*sin + x[j+half]*cos
+
+    ```python
+    rope = RoPE(rt, dim=128, max_len=4096)
+    y = rope.forward(x, pos=0)           # x [rows, dim] → [rows, dim]
+    y_dev = rope.forward_device(x_dev, rows, pos, sync=False)
+    ```
+    """
+
+    def __init__(self, rt: Runtime, dim: int, max_len: int,
+                 base: float = 10000.0, ws: Workspace | None = None,
+                 tag: str = "rope"):
+        if dim <= 0 or dim % 2:
+            raise ValueError("RoPE 的 dim 必须是正偶数")
+        if max_len <= 0:
+            raise ValueError("max_len 必须为正")
+        self.rt = rt
+        self.dim, self.half = int(dim), int(dim) // 2
+        self.max_len, self.base = int(max_len), float(base)
+        self.tag = tag
+        self._own_ws = ws is None
+        self.ws = ws or Workspace(rt)
+        j = np.arange(self.half, dtype=np.float64)
+        theta = self.base ** (-2.0 * j / self.dim)
+        pos = np.arange(self.max_len, dtype=np.float64)[:, None]
+        ang = pos * theta[None, :]
+        self.cos = self.ws.buffer(tag + ".cos", self.max_len * self.half * 4)
+        self.sin = self.ws.buffer(tag + ".sin", self.max_len * self.half * 4)
+        rt.upload(self.cos, np.cos(ang).astype(np.float32).reshape(-1))
+        rt.upload(self.sin, np.sin(ang).astype(np.float32).reshape(-1))
+        self._rows_cache: dict[int, int] = {}
+
+    def _out(self, rows: int) -> int:
+        p = self._rows_cache.get(rows)
+        if p is None:
+            p = self.ws.buffer(f"{self.tag}.out{rows}", rows * self.dim * 4)
+            self._rows_cache[rows] = p
+        return p
+
+    def forward_device(self, x_dev: int, rows: int, pos: int = 0,
+                       sync: bool = False, out_dev: int | None = None) -> int:
+        rows, pos = int(rows), int(pos)
+        if rows <= 0 or pos < 0 or pos + rows > self.max_len:
+            raise ValueError(f"RoPE 位置越界：pos={pos} rows={rows} "
+                             f"max_len={self.max_len}")
+        y = int(out_dev) if out_dev is not None else self._out(rows)
+        off = pos * self.half * 4
+        self.rt.launch("rope_apply_k", rows, 64,
+                       [y, int(x_dev), self.cos + off, self.sin + off,
+                        rows, self.dim])
+        if sync:
+            self.rt.sync()
+        return y
+
+    def forward(self, x: np.ndarray, pos: int = 0, sync: bool = True):
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        if x.ndim == 1:
+            x = x[None, :]
+        px = self.ws.buffer(self.tag + ".x", x.nbytes)
+        self.rt.upload(px, x.reshape(-1))
+        y = self.forward_device(px, x.shape[0], pos=pos, sync=sync)
+        if not sync:
+            return y
+        return self.rt.download(y, int(x.size), np.float32).reshape(x.shape)
 
 
 class KVCache:

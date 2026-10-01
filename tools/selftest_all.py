@@ -1205,6 +1205,30 @@ def t_gemv_f32_rows8_split(ctx: Ctx):
     return judge(np.abs(got - ref).max(), ref)
 
 
+@case("seq", "rope_apply_k")
+def t_rope_apply(ctx: Ctx):
+    """RoPE（rotate-half）：`y[j] = a*c - b*s`、`y[j+half] = a*s + b*c`。
+
+    `(y, x, cos, sin, rows, dim)`，`half = dim/2`，cos/sin 形状 `[rows, half]`
+    （每个位置一套表）；grid = rows，wg = 64，一个 workgroup 一行。
+    成对的是 `(j, j+half)`（HF Llama 约定），不是 GPT-J 的 `(2j, 2j+1)`。
+    """
+    rows, dim = 7, 128
+    half = dim // 2
+    rng = np.random.default_rng(150)
+    x = rng.standard_normal((rows, dim)).astype(np.float32)
+    cos = rng.standard_normal((rows, half)).astype(np.float32)
+    sin = rng.standard_normal((rows, half)).astype(np.float32)
+    py = ctx.out(rows * dim)
+    ctx.launch("rope_apply_k", rows, 64,
+               [py, ctx.buf(x), ctx.buf(cos), ctx.buf(sin), rows, dim])
+    a, b = x[:, :half], x[:, half:]
+    ref = np.concatenate([a * cos - b * sin, a * sin + b * cos],
+                         axis=1).astype(np.float32)
+    return judge(np.abs(ctx.get(py, rows * dim).reshape(rows, dim) - ref).max(),
+                 ref)
+
+
 @case("attn", "vt_scatter_k")
 def t_vt_scatter(ctx: Ctx):
     """V 行主序 → `Vt [dim, max_len]` 转置（**编译器 + DSL 共享内存**生成的核）。

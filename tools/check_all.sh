@@ -8,7 +8,7 @@
 #   1. 重新构建（baseline asm + 生成器内核 + 合并 + catalog + 引擎）
 #   2. 产物一致性：重建后的 prebuilt/ + catalog + docs/KERNELS.md 必须和仓库里
 #      提交的一致（防止「改了生成器忘了重建 / 忘了提交产物」）
-#   3. prebuilt 内核包的全内核对账（tools/selftest_all.py，71 个用例）
+#   3. prebuilt 内核包的全内核对账（tools/selftest_all.py，72 个用例）
 #   4. 编译器回归（compiler/tests/）
 #   5. 模型级端到端对账（examples/python_model_layer.py）
 set -uo pipefail

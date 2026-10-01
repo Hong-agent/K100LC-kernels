@@ -866,6 +866,39 @@ def sum64(x: ptr[f32], y: ptr[f32], n: u32):
     print("共享内存（LDS）：lane 反向 / uniform 求和 / vt_scatter 6 组 + 4 类报错 ok")
 
 
+def check_rope(out_dir: pathlib.Path) -> None:
+    """回归：`compiler/examples/rope_apply.kkl`（RoPE，rotate-half）与 NumPy 对账。
+
+    这个示例是编译器生成的**发货内核**（`rope_apply_k`，装在内核包里），
+    所以除了 selftest 之外这里再从 .kkl 源码编一遍、换几组尺寸对一次账。
+    成对的是 `(j, j+dim/2)`；cos/sin 是 `[rows, dim/2]` 的逐位置表。
+    """
+    h = compile_file(ROOT / "compiler/examples/rope_apply.kkl", out_dir,
+                     "rope_apply_k")[0]
+    for rows, dim in ((1, 128), (7, 128), (5, 192), (64, 256)):
+        half = dim // 2
+        rng = np.random.default_rng(rows * 31 + dim)
+        x = rng.standard_normal((rows, dim)).astype(np.float32)
+        cos = rng.standard_normal((rows, half)).astype(np.float32)
+        sin = rng.standard_normal((rows, half)).astype(np.float32)
+        o = run_one(h, "rope_apply_k",
+                    [{"buffer": "y"}, {"buffer": "x"}, {"buffer": "c"},
+                     {"buffer": "s"},
+                     {"scalar": {"dtype": "u32", "value": rows}},
+                     {"scalar": {"dtype": "u32", "value": dim}}],
+                    {"y": {"dtype": "f32", "values": [0.0] * (rows * dim)},
+                     "x": {"dtype": "f32", "values": x.reshape(-1).tolist()},
+                     "c": {"dtype": "f32", "values": cos.reshape(-1).tolist()},
+                     "s": {"dtype": "f32", "values": sin.reshape(-1).tolist()}},
+                    grid=rows * 64, workgroup=64)
+        got = np.array(o["y"], np.float32).reshape(rows, dim)
+        a, b = x[:, :half], x[:, half:]
+        ref = np.concatenate([a * cos - b * sin, a * sin + b * cos], axis=1)
+        d = float(np.abs(got - ref).max() / max(1e-9, float(np.abs(ref).max())))
+        assert d < 1e-6, f"rope rows={rows} dim={dim}: rel={d:.2e}"
+    print("RoPE（rotate-half，4 组尺寸）ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -884,6 +917,7 @@ def main() -> int:
     check_mixed_types(out)
     check_transcendental_hazards(out)
     check_lds(out)
+    check_rope(out)
     return 0
 
 

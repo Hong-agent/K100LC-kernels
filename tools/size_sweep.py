@@ -212,6 +212,23 @@ def g_seq_vit(s: Sweep, rng) -> None:
         ref = (x - x.mean(1, keepdims=True)) / np.sqrt(x.var(1, keepdims=True) + 1e-5) * w + b
         check(s, f"vit_ln dim={dim}",
               int((np.abs(s.get(y, rows * dim).reshape(rows, dim) - ref) > 1e-4).sum()))
+    # RoPE（rotate-half）：一个 workgroup 一行，扫 rows 与 dim（含 dim/2 不是
+    # 64 倍数的 192：最后一轮靠 varying 掩码收尾）
+    for rows, dim in ((1, 64), (1, 128), (7, 128), (64, 128), (300, 128),
+                      (5, 192), (12, 256), (2048, 128)):
+        half = dim // 2
+        x = rng.standard_normal((rows, dim)).astype(np.float32)
+        cos = rng.standard_normal((rows, half)).astype(np.float32)
+        sin = rng.standard_normal((rows, half)).astype(np.float32)
+        py = s.buf(np.zeros(rows * dim, np.float32))
+        s.run("rope_apply_k", rows, 64,
+              [py, s.buf(x), s.buf(cos), s.buf(sin), rows, dim])
+        a, b = x[:, :half], x[:, half:]
+        ref = np.concatenate([a * cos - b * sin, a * sin + b * cos], 1)
+        check(s, f"rope rows={rows} dim={dim}",
+              int((np.abs(s.get(py, rows * dim).reshape(rows, dim) - ref)
+                   > 1e-6 * max(1.0, float(np.abs(ref).max()))).sum()))
+
     erf = np.vectorize(math.erf)
     for n in (64, 1000, 4096):
         x = rng.standard_normal(n).astype(np.float32)

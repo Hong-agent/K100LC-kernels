@@ -660,6 +660,11 @@ rt.launch("kv_append_k_k", grid, 64, pkv, pstate, px, ...)
 # ViT LayerNorm
 rt.launch("vit_ln_kernel", grid, 64, [py, px, pw, pb, rows, cols, eps])
 
+# RoPE（rotate-half）：y[j]=a*c-b*s、y[j+half]=a*s+b*c，a/b 是 x 的前后半。
+#   cos/sin 形状 [rows, half]（每个位置一套表），grid = rows，wg = 64
+rt.launch("rope_apply_k", rows, 64, [py, px, pcos, psin, rows, dim])
+#   （运行时封装见 `k100lc_kernels.model.RoPE`：表常驻显存，pos 直接指到表里）
+
 # V 行主序 → Vt [dim, max_len] 转置（解码注意力 append 用；编译器 + DSL 共享内存
 # 生成的核，64x65 分块、每行 +1 填充避免 bank 冲突）
 #   vt[d*ystride + y0 + t] = v[t*vstride + d]，只动 [y0, y0+rows) 这几列

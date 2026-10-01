@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.8.6
+
+**RoPE（旋转位置编码）进内核包 + 运行时**：`rope_apply_k`（编译器 + DSL 生成）
+和 `k100lc_kernels.model.RoPE`。内核包 132 → 133。
+
+### 为什么
+
+每个 transformer 都要 RoPE，但包里原来只有一颗语义没逆向清楚的 `rope_k`
+（10 个整数参数 + 1 个 float，312 B kernarg），模型侧干脆没有这条路。这里按
+**rotate-half** 约定自己实现一颗、并对账到逐位相同（这也是模型侧唯一依赖它的
+方式——和当初 `Attention` 不依赖 `fa_decode_*` 是同一个做法）。
+
+```
+half = dim/2 ;  j ∈ [0, half)
+c = cos[pos*half + j] ;  s = sin[pos*half + j]
+a = x[row*dim + j]    ;  b = x[row*dim + j + half]
+y[row*dim + j]      = a*c - b*s
+y[row*dim + j+half] = a*s + b*c
+```
+
+* 成对的是 `(j, j+half)`（HF Llama / GPT-NeoX 的 `rotate_half`），不是 GPT-J 的
+  交错 `(2j, 2j+1)`——README / docstring 里都写明了，免得用反。
+* cos/sin 表由 `RoPE` 类按位置算好常驻显存（`[max_len, dim/2]`），逐 token 只发
+  一个内核，位置直接指到表里，不需要每步重算三角函数。
+* grid = rows（一个 workgroup 一行）、wg = 64；`dim` 只要偶数，`dim/2` 不是 64
+  的倍数时最后一轮用 varying 掩码收尾（扫过 dim=192）。
+
+### 实测
+
+| 形状 | 结果 | 耗时 |
+|---|---|---|
+| rows=1 dim=128（decode） | 逐位相同 | 11.3 us（其中 ~7 us 是启动固定开销） |
+| rows=64 dim=128 | 逐位相同 | 8.2 us |
+| rows=512 dim=128 | 逐位相同 | 8.7 us（≈300 GB/s，含 cos/sin 读） |
+| rows=2048 dim=128 | 逐位相同 | 17.1 us |
+
+### 验证
+
+* `tools/selftest_all.py` 71 → **72 个用例**（`rope_apply_k`，逐位对账）；
+* `tools/size_sweep.py` 的 `seq` 组新增 8 组尺寸（rows 1/7/64/300/2048 ×
+  dim 64/128/192/256）；
+* 编译器回归 16 → **17 项**（新增 `check_rope`：从 .kkl 源码编出来再换 4 组
+  尺寸对账）；
+* `bash tools/check_all.sh` 全绿。
+
+### 顺带测清楚的一次调用固定开销
+
+写 RoPE 时把「一次调用到底贵在哪」量了一遍（都取 200 次平均）：
+
+| 动作 | 耗时 |
+|---|---:|
+| `rt.launch`（16 个 workgroup 的小内核） | 10.9 us |
+| launch + `sync` | 21.4 us（≈10 us 是 GPU 完成往返） |
+| `upload` 4 KB | 24.1 us |
+| `download` 4 KB | 23.4 us |
+| 空 `sync`（没有在飞的活） | 0.3 us |
+
+所以「numpy 进 / numpy 出」一次算子要约 80 us，跟数据量几乎无关；逐 token 的
+解码必须走 `forward_device` + 最后统一 `sync`（这也正是这个包一直的设计）。
+`rope.forward(x)` 那 90 us 里只有 ~2 us 是内核本身。
+
 ## 1.8.5
 
 **编译器加 workgroup 共享内存（LDS）**，并用它把解码注意力的 V 转置从

@@ -25,8 +25,8 @@ sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, MLP, MoECombine,  # noqa: E402
-                            Attention, MoEExperts, RMSNorm, Runtime, Workspace,
-                            dequant_int4_group128, pack_int4_group128)
+                            Attention, MoEExperts, RMSNorm, RoPE, Runtime,
+                            Workspace, dequant_int4_group128, pack_int4_group128)
 from iq_dequant import dequant_iq4_nl, dequant_q4_0_fast  # noqa: E402
 
 FAILURES: list[str] = []
@@ -237,6 +237,31 @@ def run_int4_fast(rt: Runtime, rows: int, dim: int, ffn: int,
     ws.free()
 
 
+def run_rope(rt: Runtime, dim: int, rng) -> None:
+    """RoPE（rotate-half）与 NumPy 参考对账 + 计时。"""
+    rope = RoPE(rt, dim=dim, max_len=256, tag="rope")
+    for rows, pos in ((1, 0), (1, 63), (7, 5), (64, 100), (200, 0)):
+        if pos + rows > 256:
+            continue
+        x = rng.standard_normal((rows, dim)).astype(np.float32)
+        got = rope.forward(x, pos=pos)
+        half = dim // 2
+        j = np.arange(half)
+        theta = 10000.0 ** (-2.0 * j / dim)
+        p = np.arange(pos, pos + rows)[:, None] * theta[None, :]
+        c = np.cos(p).astype(np.float32)
+        s = np.sin(p).astype(np.float32)
+        a, b = x[:, :half], x[:, half:]
+        ref = np.concatenate([a * c - b * s, a * s + b * c], axis=1)
+        err = _rel(got, ref)
+        if err > 1e-5:
+            FAILURES.append(f"rope(rows={rows}, pos={pos})")
+        t = _bench(lambda: rope.forward(x, pos=pos), 20)
+        print(f"[rope ] rows={rows} pos={pos} dim={dim} max_rel={err:.2e} "
+              f"time={t * 1e3:.1f} us")
+    rope.ws.free()
+
+
 def run_attention(rt: Runtime, dim: int, max_len: int, rng) -> None:
     """解码注意力（`Attention`）与 NumPy 参考对账 + 计时。
 
@@ -277,6 +302,7 @@ def main() -> int:
 
     rng = np.random.default_rng(2026)
     rt = Runtime()
+    run_rope(rt, 128, rng)
     run_attention(rt, 128, 640, rng)
     run_f32(rt, args.rows, args.dim, args.ffn, rng)
     run_int4(rt, args.rows, args.dim, args.ffn, rng)
