@@ -28,6 +28,7 @@ import gen_gelu_mul  # noqa: E402
 import gen_q4_0_dequant  # noqa: E402
 import gen_q8_0_dequant  # noqa: E402
 import gen_softmax  # noqa: E402
+import gen_softmax_vec  # noqa: E402
 import gen_layernorm  # noqa: E402
 import gen_topk  # noqa: E402
 import gen_router_top10  # noqa: E402
@@ -49,7 +50,8 @@ MODULES = [
     gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_i8, gen_iq4nl_dequant, gen_iq4nl_to_i8,
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
     gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
-    gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_layernorm, gen_topk,
+    gen_q4_0_dequant, gen_q8_0_dequant, gen_softmax, gen_softmax_vec,
+    gen_layernorm, gen_topk,
     gen_router_top10,
     gen_gemv_qdot,
     gen_int4_dot,
@@ -86,7 +88,7 @@ def main() -> int:
             "vgpr_count": max(vgpr, 1),
             # warp-per-row GEMV 用 LDS 做归约（64 lane × 4B）
             "group_segment": 1024 if name in ("gemv_f32_warp_k", "softmax_k",
-                                              "layernorm_k") else 0,
+                                              "softmax_vec_k", "layernorm_k") else 0,
             "private_segment": 0,
         })
         print(f"  {name:22s} code={len(code):6d}B vgpr={max(vgpr, 1):3d} sgpr={max(ngpr, 4):2d}")

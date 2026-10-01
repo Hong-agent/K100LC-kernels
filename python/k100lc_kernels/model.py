@@ -688,6 +688,9 @@ class Attention:
             raise ValueError(f"Attention dim={dim} 必须是 64 的倍数")
         if max_len % 64:
             raise ValueError(f"Attention max_len={max_len} 必须是 64 的倍数")
+        if max_len % 256:
+            raise ValueError(f"Attention max_len={max_len} 必须是 256 的倍数"
+                             "（softmax_vec_k 一个 warp 一轮覆盖 256 列）")
         if n_split <= 0 or (n_split & (n_split - 1)):
             raise ValueError("n_split 必须是 2 的幂")
         self.rt = rt
@@ -748,7 +751,9 @@ class Attention:
             raise ValueError("n_kv 必须为正")
         # 只算「当前长度向上取整到 64」这么多列：缓存没填满时**不要**按
         # max_len 算（那会做几十倍无用功——softmax 是行扫描，代价正比于列数）。
-        pad = -(-n_kv // 64) * 64
+        # 向上取整到 256：`softmax_vec_k` 一个 lane 处理连续 4 列、一个 warp
+        # 一轮覆盖 256 个元素（访存完全合并），实测比 `softmax_k` 快 2.3 倍。
+        pad = -(-n_kv // 256) * 256
         # 1) scores = K·q（K 当权重矩阵：行=位置，列=dim）
         self.rt.launch("gemv_f32_warp_k", pad, 64,
                        [self.k, int(q_dev), self.scores, pad, self.dim, 64])
@@ -759,7 +764,8 @@ class Attention:
         self.rt.launch("scale_mul_k", -(-pad // 64), 64,
                        [self.scores, 1.0 / float(self.dim) ** 0.5, pad])
         # 3) softmax
-        self.rt.launch("softmax_k", 1, 64, [self.probs, self.scores, 1, pad, 64])
+        self.rt.launch("softmax_vec_k", 1, 64,
+                       [self.probs, self.scores, 1, pad, 64])
         # 4) out = Vt·P。两条路：
         #    * pad == max_len（缓存填满）→ `gemv_f32_warp_k` 把 Vt 当权重矩阵；
         #    * 否则用 `attn_pv_part`（支持自定义行距，只扫 pad 列）+ 归约——

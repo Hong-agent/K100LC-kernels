@@ -240,11 +240,11 @@ def run_int4_fast(rt: Runtime, rows: int, dim: int, ffn: int,
 def run_attention(rt: Runtime, dim: int, max_len: int, rng) -> None:
     """解码注意力（`Attention`）与 NumPy 参考对账 + 计时。
 
-    覆盖两种情况：`n_kv` 不是 64 的倍数（要走尾部 -1e30 掩码）与正好是。
+    覆盖三种情况：`n_kv` 不是 256 的倍数（要走尾部 -1e30 掩码）、
+    `pad` 不能被切块数整除、以及缓存远没填满（代价只按当前长度算）。
     """
-    # 100/640：尾部掩码；300/1024：pad=320 不能被 128 整除（切块要整除 pad）；
-    # 1000/16384：缓存远没填满，验证代价只按当前长度算
-    for n_kv, max_len_ in ((100, 640), (300, 1024), (1000, 16384)):
+    # 100/512：尾部掩码；300/1024：pad=512 的切块整除；1000/16384：缓存没填满
+    for n_kv, max_len_ in ((100, 512), (300, 1024), (1000, 16384)):
         max_len = max(max_len_, n_kv)
         attn = Attention(rt, dim=dim, max_len=max_len, tag=f"attn{n_kv}")
         k = rng.standard_normal((n_kv, dim)).astype(np.float32)

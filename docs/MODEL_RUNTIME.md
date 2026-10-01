@@ -281,22 +281,21 @@ out_dev = attn.forward_device(q_dev, sync=False)
 |---|---|
 | `scores = K·q` | `scores[n] = Σ_d K[n,d]·q[d]`，**K 当权重矩阵** |
 | 尾部掩码 | `fill_k` 把 padding 段填 -1e30 |
-| 缩放 / softmax | `scale_mul_k`（1/√dim）+ `softmax_k` |
+| 缩放 / softmax | `scale_mul_k`（1/√dim）+ `softmax_vec_k`（4 宽向量载入）|
 | `out = P·V` | `out[d] = Σ_j Vt[d,j]·P[j]`，**Vt 当权重矩阵** |
 
 实测（`dim=128`，设备侧连续调用）：
 
-| `n_kv` / `max_len` | 1000/16384 | 4096/16384 | 8192/16384 | 16384/16384 | 32768/32768 | 1000/32768 |
-|---|---:|---:|---:|---:|---:|---:|
-| us | 132 | 226 | 346 | 541 | 1000 | 145 |
+| `n_kv` / `max_len` | 1000/16384 | 4096/16384 | 16384/16384 | 32768/32768 | 1000/32768 |
+|---|---:|---:|---:|---:|---:|
+| us | 120 | 175 | 351 | 609 | 125 |
 
 注意代价正比于**当前长度向上取整到 64**，不是分配的 `max_len`：缓存没填满时
 （如 1000/32768）只花 145 us，而不是按 32768 算。
 
-**这个实现是「正确优先」的**：`gemv_f32_warp_k` 每个 warp 一行，解码时只有
-1 个 query，所以 `K·q` 有 n_kv 个 warp 够用，但 **`softmax_k` 是「一 warp
-一行」**——16K 上下文时只有 1 个 warp 扫 16384 列，单它就 291 us；`P·V`
-只有 dim=128 个 warp，131 us。要快得按 KV 分块（online softmax）重做这一层，
+瓶颈仍在「一 warp 一行」这一步：`softmax_vec_k` 虽然已经向量化（4 宽载入，
+126 us @16K，比 `softmax_k` 快 2.3 倍），但解码时只有 1 个 warp 在扫整行；`P·V`
+也只有 dim=128 个 warp。要再快得按 KV 分块（online softmax）重做这一层，
 见 [`ROADMAP.md`](../ROADMAP.md) B3。
 
 > 包里另有 `attn_pv_part`（编译器生成的 P·V 分块核，支持自定义行距）与

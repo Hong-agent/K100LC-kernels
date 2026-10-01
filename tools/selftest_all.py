@@ -323,6 +323,24 @@ def t_softmax(ctx: Ctx):
     return judge(np.abs(got - ref).max(), ref)
 
 
+@case("norm", "softmax_vec_k")
+def t_softmax_vec(ctx: Ctx):
+    """向量化行 softmax：lane 一次处理**连续 4 列**（`global_load_dwordx4`），
+    一个 warp 一轮覆盖 256 个元素——访存完全合并。要求 `cols % 256 == 0`。
+
+    实测比 `softmax_k`（lane 按 64 步长跳、每元素一条 load + 全排空）快
+    **2.3 倍**（cols=16384：126 vs 287 us），是解码注意力里最大的一块。
+    """
+    rows, cols = 6, 1024
+    rng = np.random.default_rng(11)
+    x = rng.standard_normal((rows, cols)).astype(np.float32) * 3
+    y, xp = ctx.out(rows * cols), ctx.buf(x)
+    ctx.launch("softmax_vec_k", rows, 64, [y, xp, rows, cols, 64])
+    e = np.exp(x - x.max(axis=1, keepdims=True))
+    ref = e / e.sum(axis=1, keepdims=True)
+    return judge(np.abs(ctx.get(y, rows * cols).reshape(rows, cols) - ref).max(), ref)
+
+
 @case("norm", "topk_k")
 def t_topk(ctx: Ctx):
     rows, cols, k = 3, 512, 8

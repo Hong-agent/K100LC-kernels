@@ -2208,6 +2208,14 @@ static const RtArg k_args_121[] = {
 static const RtArg k_args_122[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+};
+
+static const RtArg k_args_123[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
     {24u, 4u, 0},   // by_value/global
     {28u, 4u, 0},   // by_value/global
@@ -2337,6 +2345,7 @@ static const RtKernel k_table[] = {
     {"reduce_blocks_k", "reduce_blocks_k", 4u, k_args_119, 24u, 0u, 0u},
     {"router_top10_k", "router_top10_k", 5u, k_args_120, 32u, 0u, 0u},
     {"softmax_k", "softmax_k", 5u, k_args_121, 32u, 1024u, 0u},
-    {"topk_k", "topk_k", 6u, k_args_122, 40u, 0u, 0u},
+    {"softmax_vec_k", "softmax_vec_k", 5u, k_args_122, 32u, 1024u, 0u},
+    {"topk_k", "topk_k", 6u, k_args_123, 40u, 0u, 0u},
 };
-static const int k_table_n = 123;
+static const int k_table_n = 124;
