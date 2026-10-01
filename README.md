@@ -126,15 +126,28 @@ python3 tools/bench_model_paths.py --n 17408 --k 5120 --rows 1 --iters 30
 MoE 合并 `~4.5e-8`，GGUF `q4_0` / `iq4nl` 路径 `~4e-7`。API、MoE 组装与效率实践见
 [`docs/MODEL_RUNTIME.md`](docs/MODEL_RUNTIME.md)。
 
-真实形状 `17408×5120` 的线性层基准（M=1）：f32 0.699 ms/层、INT4 W4A16
-0.247 ms/层、INT4 W4A8 **0.098~0.111 ms/层（6~7×）**、INT4 W4A4
-**0.089~0.095 ms/层（7~8×）**；400 层权重流从 279.6 ms/token 压到
-**约 39~44 ms/token**（W4A8）或 **约 36~38 ms/token**（W4A4）。
+真实形状 `17408×5120` 的线性层基准（M=1，`tools/bench_model_paths.py`）：
+f32 0.695 ms/层、INT4 W4A16 **0.225 ms/层（3.1×）**、INT4 W4A8
+**0.102 ms/层（6.8×）**、INT4 W4A4 **0.096 ms/层（7.3×）**；400 层权重流
+从 279.6 ms/token 压到 **约 39~44 ms/token**（W4A8）或
+**约 36~38 ms/token**（W4A4）。
 
 MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简单）与
 `MoEExperts`（token→expert 分桶 + `gather_rows_k` / `moe_combine_gather_k`）。
-实测 `rows=2048 dim=2048 n_exp=8 topk=2`：稠密 4.97 ms → 分桶 **1.84 ms
-（2.71×）**。
+实测 `rows=2048 dim=2048 n_exp=8 topk=2`：稠密 4.94 ms → 分桶 **1.95 ms
+（2.54×）**。
+
+## 自检与基准
+
+| 工具 | 作用 |
+|---|---|
+| `tools/selftest_all.py` | **发货产物**（`prebuilt/` 那份 HSACO）的全内核对账基线：53 个用例覆盖逐元素 / 归一化 / softmax / top-k / router / MoE / GEMV / 量化解码 / 融合点积 / RT4 W4A4·W4A8 / 激活量化，支持 `--group`、`--only`、`--json` |
+| `tools/bench_decode.py` | 解码（M=1..4）每条权重通路的 us/层 与 GB/s |
+| `tools/bench_model_paths.py` | f32 / W4A16 / W4A8 / W4A4 / 预填充 GEMM 五路对比 |
+| `tools/bench_moe.py` | 稠密全专家 vs 分桶 |
+
+各生成器（`tools/gen_*.py`）自带的自检只管「现场重新汇编出来的那份」，
+`selftest_all.py` 补的是打包产物那一环。
 
 ## 量化权重通路
 
