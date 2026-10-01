@@ -306,6 +306,25 @@ class CodeGen:
     def is_uniform(self, v: Val) -> bool:
         return v.kind in ("s", "lit") and v.ty != "f32"
 
+    def _f32_operand(self, v: Val) -> Val:
+        """f32 上下文里的整数常量要**当成数值**转成 f32。
+
+        `as_vreg` 对整型字面量发的是 `v_mov_b32 vN, <整数>`——那是位模式，
+        在浮点运算里等于把 1 变成 1.4e-45。所以 `x[i] + 1`、`x[i] > 1`、
+        `y[i] = 1` 这些写法都会静默算错（v1.8.1 之前一直如此）。
+        """
+        if v.kind == "lit" and v.ty != "f32" and not isinstance(v.value, float):
+            return Val("lit", None, "f32", float(v.value))
+        if v.ty not in ("f32", "bool") and v.kind in ("v", "s"):
+            # 整数**变量**同理：`m = 3` 之后 `x[i] * m` 也要先 cvt 成 f32
+            src = self.as_vreg(v)
+            r = self.alloc_tmp_v()
+            op = "v_cvt_f32_i32_e32" if v.ty == "s32" else "v_cvt_f32_u32_e32"
+            self.emit(f"{op} v{r}, v{src}")
+            self._release(v)
+            return Val("v", r, "f32")
+        return v
+
     def as_vreg(self, v: Val) -> int:
         if v.pending:
             self._wait_loads()
@@ -428,10 +447,12 @@ class CodeGen:
                 raise CompileError("只支持 and / or")
             mn = "s_and_b64" if isinstance(node.op, ast.And) else "s_or_b64"
             acc = self._alloc_tmp_s(2)
+            all_uniform = True
             first = True
             for sub in node.values:
                 v = self.expr(sub)
                 if v.kind == "vpred":
+                    all_uniform = False
                     pass                       # 掩码已经在 vcc 里
                 elif v.kind == "spred":
                     # 标量条件在 SCC 里，展成 64 位掩码再合并
@@ -445,6 +466,11 @@ class CodeGen:
                     self.emit(f"{mn} vcc, vcc, s[{acc}:{acc + 1}]")
                     self.emit(f"s_mov_b64 s[{acc}:{acc + 1}], vcc")
             self.emit(f"s_mov_b64 vcc, s[{acc}:{acc + 1}]")
+            if all_uniform:
+                # 全部是标量条件 → 结果也该是标量（否则 `while a and b` 这种
+                # 全 uniform 的写法会被 `_while` 当成 varying 拒掉）
+                self.emit(f"s_cmp_lg_u32 s{acc}, 0")
+                return Val("spred", None, "bool")
             return Val("vpred", None, "bool")
         if isinstance(node, ast.Subscript):
             return self.load(node)
@@ -455,6 +481,7 @@ class CodeGen:
     def binop(self, op: str, a: Val, b: Val, ty: str | None = None) -> Val:
         ty = ty or (a.ty if a.ty != "u32" else b.ty)
         if ty == "f32":
+            a, b = self._f32_operand(a), self._f32_operand(b)
             av, bv = self.as_vreg(a), self.as_vreg(b)
             dst = self.alloc_tmp_v()
             if op == "+":
@@ -556,6 +583,8 @@ class CodeGen:
             mn, swap = m[op]
             self.emit(f"{mn}_{base} s{sb if swap else sa}, s{sa if swap else sb}")
             return Val("spred", None, "bool")
+        if ty == "f32":
+            a, b = self._f32_operand(a), self._f32_operand(b)
         av, bv = self.as_vreg(a), self.as_vreg(b)
         if ty == "f32":
             # f32 比较只有 e64 形式支持「两个都是 VGPR」：e32 的第一个源在
@@ -683,6 +712,7 @@ class CodeGen:
             return Val("v", r, n)
         if n == "exp":
             arg = self.expr(node.args[0])
+            arg = self._f32_operand(arg)
             v = self.as_vreg(arg)
             log2e = self.alloc_tmp_v()
             bits = struct.unpack("<I", struct.pack("<f", 1.4426950408889634))[0]
@@ -691,19 +721,27 @@ class CodeGen:
             self.emit(f"v_mul_f32_e32 v{r}, v{v}, v{log2e}")
             self.emit("s_nop 0")          # v_exp_f32 的输入 hazard
             self.emit(f"v_exp_f32_e32 v{r}, v{r}")
+            self.emit("s_nop 0")          # 结果的读 hazard（同 sqrt/rcp）
             self.free_tmp_v(log2e)
             self._release(arg)
             return Val("v", r, "f32")
         if n in ("sqrt", "rsqrt"):
             arg = self.expr(node.args[0])
+            arg = self._f32_operand(arg)
             v = self.as_vreg(arg)
             r = self.alloc_tmp_v()
             op = {"sqrt": "v_sqrt_f32_e32", "rsqrt": "v_rsq_f32_e32"}[n]
+            self.emit("s_nop 0")          # 源的读 hazard（与 exp 同理）
             self.emit(f"{op} v{r}, v{v}")
+            # 与 `v_exp_f32` / `v_rcp_f32` 同类：结果刚写出来就被后续 VALU/VMEM
+            # 读的话要隔一条 `s_nop 0`。少了它会出现**同一个 wave 里只有部分
+            # lane 算错**（实测 `y[i] = sqrt(4)` 时每 16 个元素里 8~11 号是 0）。
+            self.emit("s_nop 0")
             self._release(arg)
             return Val("v", r, "f32")
         if n == "fma":
             argv = [self.expr(x) for x in node.args]
+            argv = [self._f32_operand(x) for x in argv]
             a, b, c = (self.as_vreg(x) for x in argv)
             r = self.alloc_tmp_v()
             self.emit(f"v_fma_f32 v{r}, v{a}, v{b}, v{c}")
@@ -711,6 +749,7 @@ class CodeGen:
             return Val("v", r, "f32")
         if n == "fabs":
             arg = self.expr(node.args[0])
+            arg = self._f32_operand(arg)
             v = self.as_vreg(arg)
             r = self.alloc_tmp_v()
             self.emit(f"v_and_b32_e32 v{r}, 0x7fffffff, v{v}")
@@ -723,6 +762,8 @@ class CodeGen:
             is_f = "f32" in (argv[0].ty, argv[1].ty)
             if not is_f and "s32" in (argv[0].ty, argv[1].ty):
                 raise CompileError(f"{n} 暂不支持 s32（编码表里没有 i32 的 max/min）")
+            if is_f:
+                argv = [self._f32_operand(x) for x in argv]
             a, b = (self.as_vreg(x) for x in argv)
             r = self.alloc_tmp_v()
             if is_f:
@@ -749,6 +790,8 @@ class CodeGen:
             return Val("v", r, ty)
         if n in ("floor", "ceil", "trunc", "rint", "fract", "ubyte"):
             argv = [self.expr(x) for x in node.args]
+            if n != "ubyte":                     # ubyte 要的就是整数
+                argv = [self._f32_operand(x) for x in argv]
             v = self.as_vreg(argv[0])
             r = self.alloc_tmp_v()
             if n == "ubyte":
@@ -834,8 +877,10 @@ class CodeGen:
         if ptr is None or ptr.kind != "ptr":
             raise CompileError(f"{node.value.id} 不是指针")
         idx = self.expr(node.slice)
-        src = self.as_vreg(value)
         et = ptr.ty.split(":", 1)[1]
+        if et == "f32":
+            value = self._f32_operand(value)   # `y[i] = 1` 也要当 1.0
+        src = self.as_vreg(value)
         lo, hi = self._addr(ptr, idx, et)
         mn = {"f32": "global_store_dword", "u32": "global_store_dword",
               "s32": "global_store_dword", "u16": "global_store_short",
@@ -907,6 +952,8 @@ class CodeGen:
             raise CompileError(f"不支持的语句 {type(node).__name__}")
 
     def _assign_name(self, name: str, val: Val, force_ty: str | None = None) -> None:
+        if force_ty == "f32":
+            val = self._f32_operand(val)        # `v: f32 = 1` 要当 1.0
         ty = force_ty or val.ty
         if name in self.env:
             dst = self.env[name]

@@ -511,7 +511,7 @@ def wk(x: ptr[f32], y: ptr[f32], n: u32):
         got = np.array(o["y"], np.float32)
         ref = np.asarray(ref_fn(x), np.float32)
         d = float(np.abs(got - ref).max())
-        assert d < 1e-5, f"{title}: max_abs={d}"
+        assert d < 1e-5, f"{title}: max_abs={d} got={got[:3]} ref={ref[:3]}"
     try:
         compile_source("def bad(x: ptr[f32], y: ptr[f32]):\n"
                        "    c = 0\n"
@@ -521,6 +521,112 @@ def wk(x: ptr[f32], y: ptr[f32], n: u32):
     except Exception as exc:                       # noqa: BLE001
         assert "uniform" in str(exc), exc
     print("while（4 种写法）+ varying 条件报错 ok")
+
+
+def check_mixed_types(out_dir: pathlib.Path) -> None:
+    """回归：整数与 f32 混用时的类型提升。
+
+    v1.8.1 之前，整数常量/变量出现在 f32 上下文里会被当成**位模式**
+    （`v_mov_b32 vN, 1` 是 1.4e-45 而不是 1.0），于是下面这些写法静默算错：
+    `x[i] + 1`、`x[i] * m`（m 是整数变量）、`y[i] = 1`、`x[i] > 3`、
+    `min(x[i], 3)`、`sqrt(4)`、`fma(x, 2, 1)`、`fabs(-1)`、`floor(2)`……
+    """
+    n = 16
+    x = np.arange(n, dtype=np.float32) + 1.0
+    body_cases = [
+        ("f32 + 整数字面量", "y[i] = x[i] + 1", lambda a: a + 1.0),
+        ("f32 * 整数变量", "m = 3\n        y[i] = x[i] * m", lambda a: a * 3.0),
+        ("f32 / 整数变量", "d = 2\n        y[i] = x[i] / d", lambda a: a / 2.0),
+        ("f32 指针存整数常量", "y[i] = 2", lambda a: np.full(len(a), 2.0)),
+        ("f32 比较 vs 整数", "y[i] = 0.0\n        if x[i] > 3:\n            y[i] = 1.0",
+         lambda a: np.where(a > 3, 1.0, 0.0)),
+        ("min(x, 3)", "y[i] = min(x[i], 3)", lambda a: np.minimum(a, 3.0)),
+        ("max(x, 1)", "y[i] = max(x[i], 1)", lambda a: np.maximum(a, 1.0)),
+        ("sqrt(4)", "y[i] = sqrt(4)", lambda a: np.full(len(a), 2.0)),
+        ("rsqrt(4)", "y[i] = rsqrt(4)", lambda a: np.full(len(a), 0.5)),
+        ("fma(x, 2, 1)", "y[i] = fma(x[i], 2, 1)", lambda a: a * 2 + 1),
+        ("fabs(-1)", "y[i] = fabs(-1)", lambda a: np.ones(len(a))),
+        ("floor(2)", "y[i] = floor(2)", lambda a: np.full(len(a), 2.0)),
+        ("rint(2)", "y[i] = rint(2)", lambda a: np.full(len(a), 2.0)),
+        ("s32 变量参与 f32 运算",
+         "m = s32(x[i] - x[i]) - 2\n        y[i] = x[i] * f32(m)",
+         lambda a: a * -2.0),
+    ]
+    for title, body, ref_fn in body_cases:
+        src = (f"\ndef mt(x: ptr[f32], y: ptr[f32], n: u32):\n"
+               f"    i = gid()\n    if i < n:\n        {body}\n")
+        h = compile_source(src, out_dir, "mt")[0]
+        o = run_one(h, "mt",
+                    [{"buffer": "x"}, {"buffer": "y"},
+                     {"scalar": {"dtype": "u32", "value": n}}],
+                    {"x": {"dtype": "f32", "values": x.tolist()},
+                     "y": {"dtype": "f32", "values": [0.0] * n}},
+                    grid=n, workgroup=64)
+        got = np.array(o["y"], np.float32)
+        ref = np.asarray(ref_fn(x), np.float32)
+        d = float(np.abs(got - ref).max())
+        assert d < 1e-5, f"{title}: max_abs={d} got={got[:3].tolist()} ref={ref[:3].tolist()}"
+    # 全 uniform 的 `while a and b`（之前会被当成 varying 拒掉）
+    src = """
+def mt(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        a = 0
+        b = 0
+        while a < 3 and b < 5:
+            a = a + 1
+            b = b + 1
+        y[i] = f32(a * 10 + b)
+"""
+    h = compile_source(src, out_dir, "mt")[0]
+    o = run_one(h, "mt",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": n}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * n}},
+                grid=n, workgroup=64)
+    got = np.array(o["y"], np.float32)
+    assert np.array_equal(got, np.full(n, 33.0, np.float32)), got[:4]
+    print(f"混合类型提升（{len(body_cases)} 项）+ uniform while-and ok")
+
+
+def check_transcendental_hazards(out_dir: pathlib.Path) -> None:
+    """回归：`v_sqrt_f32` / `v_rsq_f32` / `v_exp_f32` 的 VALU 读-写冒险。
+
+    这几个指令的源刚被 VALU 写过、或者结果立刻被后续指令读，都需要隔一条
+    `s_nop 0`。少一条时**同一个 wave 里只有部分 lane 算错**（实测
+    `y[i] = sqrt(4)` 时每 16 个元素里第 8~11 号是 0，看起来像"随机丢数据"）。
+    """
+    n = 64
+    x = np.arange(n, dtype=np.float32) * 0.1 + 0.5
+    cases = [
+        ("sqrt(4)（字面量源）", "y[i] = sqrt(4)", lambda a: np.full(len(a), 2.0), 1e-6),
+        ("rsqrt(4)（字面量源）", "y[i] = rsqrt(4)", lambda a: np.full(len(a), 0.5), 1e-6),
+        ("sqrt(x)", "y[i] = sqrt(x[i])", lambda a: np.sqrt(a), 1e-6),
+        ("rsqrt(x)", "y[i] = rsqrt(x[i])", lambda a: 1.0 / np.sqrt(a), 1e-6),
+        ("exp(x)", "y[i] = exp(x[i])", lambda a: np.exp(a), 1e-5),
+        ("sqrt(9) + rsqrt(4)", "y[i] = sqrt(9) + rsqrt(4)",
+         lambda a: np.full(len(a), 3.5), 1e-6),
+        ("exp(x*0.1) + sqrt(2)", "y[i] = exp(x[i] * 0.1) + sqrt(2)",
+         lambda a: np.exp(a * 0.1) + np.sqrt(2.0), 1e-5),
+        ("1/x（v_rcp 通路）", "y[i] = 1.0 / x[i]", lambda a: 1.0 / a, 1e-6),
+        ("x/3（常量倒数）", "y[i] = x[i] / 3.0", lambda a: a / 3.0, 1e-6),
+    ]
+    for title, body, ref_fn, rtol in cases:
+        src = (f"\ndef th(x: ptr[f32], y: ptr[f32], n: u32):\n"
+               f"    i = gid()\n    if i < n:\n        {body}\n")
+        h = compile_source(src, out_dir, "th")[0]
+        o = run_one(h, "th",
+                    [{"buffer": "x"}, {"buffer": "y"},
+                     {"scalar": {"dtype": "u32", "value": n}}],
+                    {"x": {"dtype": "f32", "values": x.tolist()},
+                     "y": {"dtype": "f32", "values": [0.0] * n}},
+                    grid=n, workgroup=64)
+        got = np.array(o["y"], np.float32)
+        ref = np.asarray(ref_fn(x), np.float32)
+        rel = float(np.abs(got - ref).max() / max(1e-9, float(np.abs(ref).max())))
+        assert rel < rtol, f"{title}: rel={rel:.3e} got={got[:6].tolist()}"
+    print(f"超越函数 hazard（{len(cases)} 项）ok")
 
 
 def main() -> int:
@@ -537,6 +643,8 @@ def main() -> int:
     check_int_cmp_and_divmod(out)
     check_math_builtins(out)
     check_while(out)
+    check_mixed_types(out)
+    check_transcendental_hazards(out)
     return 0
 
 
