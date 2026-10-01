@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.9.3
+
+**编译器不再给每条 store 加 `s_waitcnt vmcnt(0)`** —— 这是「循环里写 64 次」
+变成 64 次完整访存往返的根因。一层 decoder 到 **0.214~0.220 ms/token**。
+
+### 问题
+
+`store()` 里每条 `global_store_*` 后面都跟一条 `s_waitcnt vmcnt(0)`。VMEM 存储
+是 fire-and-forget，同一条 lane 上 store→load 由硬件保序，跨 lane / 跨 wave 的
+可见性该由 barrier 统一负责 —— 逐条等纯属浪费。实测代价很大：
+
+```
+vt_scatter_k    rows=1（一个 workgroup，128 轮循环）: 43.9 us → 20.7 us
+vt_scatter_v_k  rows=1                              : 38.8 us → 28.9 us
+rope_apply_k    16 行（只有 16 次 store 在循环里）   :  9.1 us →  7.0 us
+```
+
+### 改法
+
+* `store()` 不再发 `s_waitcnt vmcnt(0)`；
+* `barrier()` 改成 `s_waitcnt lgkmcnt(0)` + `s_waitcnt vmcnt(0)` + `s_barrier`
+  —— 原来只冲 LDS，现在把全局写也一起冲，所以「写全局 → barrier → 别的 lane
+  读」这种跨 lane 用法仍然正确（编译器自检里的 LDS 用例、`check_lds`、
+  `check_rope`、`check_spill` 全部照旧通过）。
+* 六个编译器生成的内核用新编译器**重新导出**：`vt_scatter_k`、
+  `vt_scatter_v_k`、`rope_apply_k`、`q4k/q5k/q6k_dequant`。
+  （`q4k_dequant` 这类内核改动前后一样快：它的循环里没有 store，只有最后
+  一条 —— 如实记录。）
+
+### 实测
+
+| | 改前 | 改后 |
+|---|---:|---:|
+| `vt_scatter_k` rows=1 | 43.9 us | **20.7 us** |
+| `vt_scatter_v_k` rows=1 | 38.8 us | **28.9 us** |
+| `rope_apply_k` 16 行 | 9.1 us | **7.0 us**（到 launch 下限） |
+| `q4k_dequant` 512 blocks | 194.3 us | 195.8 us（循环里没有 store） |
+| 一层 decoder（设备侧，30 token） | 0.232 ms/token | **0.214~0.220 ms/token** |
+| 一层 decoder（numpy 进/出） | 0.92 ms/token | **0.67 ms/token** |
+
+### 验证
+
+* `compiler/tests/test_examples.py` 18 项全过（含 LDS 的 barrier 语义、
+  `vt_scatter` 6 组形状、RoPE 4 组、spill 230 变量）；
+* `tools/selftest_all.py` **77 个用例**全过；`bash tools/check_all.sh` 全绿；
+* 一层 decoder 逐 token 对账 **1.76e-07**（8 token，KV 缓存增长中）。
+
 ## 1.9.2
 
 **SwiGLU 融进 down 投影**：新内核 `gemv_f32_gated_acc_k`

@@ -81,6 +81,12 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
   因此 `>=` / `<=` 是「不小于 / 不大于」，NaN 上与有序比较不同
   （`check_f32_cmp` 覆盖 f32 的 6 个运算符，`check_int_cmp_and_divmod`
   覆盖 u32/s32 各 6 个）。
+* **store 不逐条等**：`global_store_*` 是 fire-and-forget，同一条 lane 上
+  store→load 由硬件保序，所以 `store()` 不再发 `s_waitcnt vmcnt(0)`；
+  跨 lane / 跨 wave 的可见性交给 `barrier()`（它发
+  `s_waitcnt lgkmcnt(0)` + `s_waitcnt vmcnt(0)` + `s_barrier`）。
+  **v1.9.3 之前每条 store 后面都等一次**，于是「循环里写 64 次」就是 64 次完整
+  访存往返（实测 `vt_scatter_k` 一个 workgroup 43.9 us → 20.7 us）。
 * `min(a,b)` 用 `-max(-a,-b)` 实现（编码表里没有 f32 的 `v_min`）。
 * varying 条件的 `if/else` 用 exec 掩码切换：`(old & vcc)` 跑 then、
   `(old & ~vcc)` 跑 else，最后 `s_mov_b64 exec, save` 复原。

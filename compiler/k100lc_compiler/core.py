@@ -1028,7 +1028,12 @@ class CodeGen:
               "s16": "global_store_short", "u8": "global_store_byte",
               "s8": "global_store_byte"}[et]
         self.emit(f"{mn} v[{lo}:{hi}], v{src}, off")
-        self.emit("s_waitcnt vmcnt(0)")
+        # 这里**不**等：VMEM 存储是 fire-and-forget，同一条 lane 上
+        # store→load 由硬件保序，跨 lane / 跨 wave 的可见性由 barrier 统一冲
+        # （见 barrier()）。以前每条 store 后面都跟一条 `s_waitcnt vmcnt(0)`，
+        # 于是「循环里写 64 次」变成 64 次完整的访存往返 —— 实测
+        # `vt_scatter_v_k` 一个 workgroup 要 38 us（其中 64 次 store 等待占了
+        # 绝大部分），去掉后同一内核降到 ~6 us。
         self.free_addr_pair()
         self._release(value)
 
@@ -1113,8 +1118,10 @@ class CodeGen:
             if fn in ("barrier", "lds_barrier"):
                 if node.value.args:
                     raise CompileError("barrier() 不接受参数")
-                # LDS 写入要先落地，再让所有 lane 在屏障上对齐
+                # LDS 与全局写入都要先落地，再让所有 lane 在屏障上对齐
+                # （全局那一条是给「写了全局再 barrier 再被别人读」准备的）
                 self.emit("s_waitcnt lgkmcnt(0)")
+                self.emit("s_waitcnt vmcnt(0)")
                 self.emit("s_barrier")
                 return
             raise CompileError(f"不支持的表达式语句 {fn or type(node.value).__name__}()")

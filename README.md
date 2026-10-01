@@ -118,7 +118,7 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
 一次前向 2 个 launch）/ `RoPE` / `Sampler` / `run_sequence`，以及把整条链串起来
 的 **`TransformerLayer`**（RMSNorm → QKV → RoPE → 融合多头注意力 → 输出投影 →
 残差 → RMSNorm → SwiGLU → 残差；整层设备侧串联、逐 token 一次 `sync`，
-dim=512/8 头/ffn=1024 实测 **0.23 ms/token（10 个内核）**，对账 1.9e-07）。
+dim=512/8 头/ffn=1024 实测 **0.21 ms/token（10 个内核）**，对账 1.9e-07）。
 
 ```bash
 python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024

@@ -99,7 +99,6 @@ v_mov_b32_e32 v15, s17
 v_add_co_u32_e32 v14, vcc, v14, v65
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
 global_store_dword v[14:15], v66, off
-s_waitcnt vmcnt(0)
 v_mul_f32_e32 v64, v11, v10
 v_mul_f32_e32 v65, v12, v9
 v_add_f32_e32 v66, v64, v65
@@ -114,7 +113,6 @@ v_mov_b32_e32 v15, s17
 v_add_co_u32_e32 v14, vcc, v14, v65
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
 global_store_dword v[14:15], v66, off
-s_waitcnt vmcnt(0)
 s_or_b64 exec, exec, s[48:49]
 if_end_6:
 for_inc_4:

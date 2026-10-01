@@ -62,6 +62,7 @@ s_add_i32 s33, s33, 1
 s_branch for_loop_1
 for_end_3:
 s_waitcnt lgkmcnt(0)
+s_waitcnt vmcnt(0)
 s_barrier
 s_mov_b32 s80, 64
 s_mov_b32 s35, 0
@@ -96,7 +97,6 @@ v_mov_b32_e32 v15, s17
 v_add_co_u32_e32 v14, vcc, v14, v65
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
 global_store_dword v[14:15], v66, off
-s_waitcnt vmcnt(0)
 if_end_10:
 s_or_b64 exec, exec, s[48:49]
 if_end_9:
