@@ -232,6 +232,10 @@ python3 compiler/tests/test_examples.py
   需要二维并行时优先使用 1D 扁平块号内核（例如 `gemm_w4a4_flat`）。
 * 只支持 `/opt/hyhal` 的 HSA 运行时。
 
+* **两个内核有实测缺陷，暂勿在未经对账的场景下使用**：
+  `concat2_k` 在 `n` 稍大时会越界读（同参数复跑结果不同，取决于显存布局）；
+  `vit_bias_s_kernel` 只在 `period == dim` 时正确。详见 `CHANGELOG.md` 1.7.3。
+
 ## 许可
 
 本包自有代码 Apache-2.0（见 [`LICENSE`](LICENSE)）；i-quant 码本、掩码、

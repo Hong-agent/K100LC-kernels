@@ -182,6 +182,11 @@ def t_concat2(ctx: Ctx):
     # 实测语义：**按 pre 分块交替交织**，不是单纯拼接
     #   q = i // pre, r = i % pre
     #   out[i] = (q 偶 ? a : b)[(q // 2) * pre + r]
+    #
+    # 注意：**只在中小尺寸可靠**。`pre=32, n=1024` 时同一组参数在不同显存
+    # 布局下会给出不同结果（有时全对、有时从下标 0 或 384 起错 64~192 个）
+    # ——说明内部那次 `i // pre` 的魔法除法范围不够，越界读了相邻显存。
+    # 所以这个用例只钉小尺寸（n=32）已确认的确定性行为。
     pre, n = 8, 32
     rng = np.random.default_rng(3)
     a = rng.standard_normal(n).astype(np.float32)
