@@ -1328,6 +1328,34 @@ def t_flash_dec_part(ctx: Ctx):
     return judge(np.abs(got - ref).max(), ref)
 
 
+@case("attn", "flash_dec_comb_k")
+def t_flash_dec_comb(ctx: Ctx):
+    """`flash_dec_comb_k` 单独对账，专门盯 `nsplit` 不是 4 的倍数的**尾部路径**。
+
+    内核的 `L_s` 循环按 4 个分块一组展开（组内 12 条 load 只等一次），多出来
+    的 1~3 个分块走 `L_s_one`。这里直接给 `pm/pl/po` 喂随机数，逐元素比
+    `out[head][d] = Σ_s w_s·o_s[d] / Σ_s w_s·l_s`（`w_s = exp((m_s - M)·inv)`）。
+    """
+    rng = np.random.default_rng(161)
+    worst = 0.0
+    for n_heads, dh, nsplit in ((3, 64, 1), (2, 64, 2), (2, 64, 3), (2, 128, 5),
+                                (3, 64, 6), (2, 128, 7), (2, 64, 9), (4, 128, 12)):
+        pm = (rng.standard_normal((n_heads, nsplit)) * 3).astype(np.float32)
+        pl = (rng.random((n_heads, nsplit)) + 0.25).astype(np.float32)
+        po = rng.standard_normal((n_heads, nsplit, dh)).astype(np.float32)
+        inv = np.float32(1.0 / np.sqrt(dh))
+        py = ctx.out(n_heads * dh)
+        ctx.launch("flash_dec_comb_k", n_heads, 64,
+                   [py, ctx.buf(po.reshape(-1)), ctx.buf(pm.reshape(-1)),
+                    ctx.buf(pl.reshape(-1)), dh, nsplit, float(inv)])
+        got = ctx.get(py, n_heads * dh).reshape(n_heads, dh)
+        w = np.exp((pm - pm.max(axis=1, keepdims=True)) * inv).astype(np.float32)
+        ref = ((w[:, :, None] * po).sum(1)
+               / (w * pl).sum(1)[:, None]).astype(np.float32)
+        worst = max(worst, float(np.abs(got - ref).max()))
+    return judge(worst, np.array([1.0], np.float32))
+
+
 @case("attn", "vt_scatter_v_k")
 def t_vt_scatter_v(ctx: Ctx):
     """K 转置 + V 原样拷（**一个** launch 完成 KV 追加的两件事）。

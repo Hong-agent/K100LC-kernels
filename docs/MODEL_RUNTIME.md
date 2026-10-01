@@ -339,6 +339,12 @@ out_dev = fa.forward_device(q_dev, sync=False)
 （8×128、n_kv=1：343 → 74 us）；**1~2 头反而慢**（分块并行度不够），那种情况
 继续用下面的单头 `Attention`。
 
+两条内核的分项耗时用 `tools/bench_flash_decode.py` 量（`--what part|comb`）。
+v1.9.6 把 `flash_dec_comb_k` 的内层循环按 4 个分块一组展开（组内 12 条 load
+只等一次），nsplit=64 时 85.6 → **31.6 us（2.7 倍）**、nsplit=32 时 44.9 →
+18.0 us；n_kv=2048、dh=64 时整条前向约 62 us，其中 `flash_dec_part_k` 占
+48.8 us——**part 才是下一步的大头**（它是延迟受限的，见 `ROADMAP.md` B3 后续）。
+
 ```python
 # 要求：R = pad >> log2(nsplit) 是 64 的倍数，且 R ≤ 4096（LDS 16 KB + 256）
 ```

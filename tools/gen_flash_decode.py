@@ -529,94 +529,191 @@ def gen_part_asm() -> str:
     return "\n".join(L) + "\n"
 
 
-def gen_comb_asm() -> str:
-    """`flash_dec_comb_k(out, po, pm, pl, dh, nsplit, inv)`：grid = n_heads。"""
-    return "\n".join([
+COMB_UNROLL = 4          # `flash_dec_comb_k` 的 `L_s` 循环按几个分块一组展开
+
+
+def gen_comb_asm(unroll: int = COMB_UNROLL) -> str:
+    """`flash_dec_comb_k(out, po, pm, pl, dh, nsplit, inv)`：grid = n_heads。
+
+    原来 `L_s` 循环每个分块单独发 3 条 load、单独等一次 `vmcnt(0)`：nsplit 个
+    分块就是 nsplit 次访存往返，而往返之间还夹着「SALU 写 s31 → VALU 取 s31 →
+    算地址 → load」的依赖链，延迟完全暴露（实测 nsplit=64 时整个内核里循环占
+    74/85 us）。改成按 `unroll` 个分块一组：
+
+    * 组内 3·unroll 条 load **全发出去**，只等一次 `vmcnt(0)`；
+    * `pm/pl` 同一头下 nsplit 个分块是连续的 4 字节，组内 m_k / l_k 直接吃
+      地址上的**立即数偏移**，一条地址算到底；
+    * `po` 的行距 `dh*4` 运行时才知道，用寄存器累加。
+
+    往返次数从 nsplit 降到 ceil(nsplit/unroll)。`nsplit` 不是 unroll 的倍数时
+    尾部退回原来的单步路径，语义（含 `nsplit<unroll`）不变。
+    """
+    if unroll not in (1, 2, 4):
+        raise ValueError("unroll 只能是 1/2/4")
+    pool = [r for r in range(12, 32) if r != 20]      # v20 = d，保留
+
+    def take(n: int) -> list[int]:
+        return [pool.pop(0) for _ in range(n)]
+
+    mr = take(unroll)                                 # m_s
+    lr = take(unroll)                                 # l_s
+    orr = take(unroll)                                # o_s[d]
+    v_ib, v_off, v_tmp, v_a, v_b, v_w = take(6)
+
+    def addr(slo: int, shi: int, voff: int) -> list[str]:
+        return [f"v_mov_b32_e32 v{v_a}, s{slo}",
+                f"v_mov_b32_e32 v{v_b}, s{shi}",
+                f"v_add_co_u32_e32 v{v_a}, vcc, v{v_a}, v{voff}",
+                f"v_addc_co_u32_e32 v{v_b}, vcc, v{v_b}, v1, vcc"]
+
+    def weigh(k: int) -> list[str]:
+        r = mr[k], lr[k], orr[k]
+        return [f"v_sub_f32_e32 v{v_w}, v{r[0]}, v3",
+                f"v_mul_f32_e32 v{v_w}, v{v_w}, v11",
+                f"v_mul_f32_e32 v{v_w}, v{v_w}, v10",
+                "s_nop 0",
+                f"v_exp_f32_e32 v{v_w}, v{v_w}",
+                "s_nop 0",
+                f"v_fma_f32 v8, v{v_w}, v{r[2]}, v8",
+                f"v_fma_f32 v9, v{v_w}, v{r[1]}, v9"]
+
+    # 单步：idx → 三对地址 → 三条 load → 等一次
+    one: list[str] = [
+        f"v_mul_lo_u32 v{v_ib}, v2, s29",             # head*nsplit
+        f"v_mov_b32_e32 v{v_tmp}, s31",               # s（VGPR 版）
+        f"v_add_u32_e32 v{v_ib}, v{v_ib}, v{v_tmp}",
+        f"v_lshlrev_b32_e32 v{v_off}, 2, v{v_ib}",    # pm/pl 字节偏移
+        *addr(20, 21, v_off),
+        f"global_load_dword v{mr[0]}, v[{v_a}:{v_b}], off",
+        *addr(22, 23, v_off),
+        f"global_load_dword v{lr[0]}, v[{v_a}:{v_b}], off",
+        f"v_mul_lo_u32 v{v_off}, v{v_ib}, s28",       # v_off 用完，改存 po 偏移
+        f"v_add_u32_e32 v{v_off}, v{v_off}, v20",
+        f"v_lshlrev_b32_e32 v{v_off}, 2, v{v_off}",
+        *addr(18, 19, v_off),
+        f"global_load_dword v{orr[0]}, v[{v_a}:{v_b}], off",
+        "s_waitcnt vmcnt(0)",
+        *weigh(0),
+        "s_add_i32 s31, s31, 1",
+        "s_branch L_s",
+    ]
+
+    # 展开组：一次发 3·unroll 条 load、只等一次
+    grp: list[str] = []
+    if unroll > 1:
+        grp += [
+            f"v_mul_lo_u32 v{v_ib}, v2, s29",
+            f"v_mov_b32_e32 v{v_tmp}, s31",
+            f"v_add_u32_e32 v{v_ib}, v{v_ib}, v{v_tmp}",
+            f"v_lshlrev_b32_e32 v{v_off}, 2, v{v_ib}",
+            *addr(20, 21, v_off),
+        ]
+        grp += [f"global_load_dword v{mr[k]}, v[{v_a}:{v_b}], off "
+                f"offset:{4 * k}" for k in range(unroll)]
+        grp += addr(22, 23, v_off)
+        grp += [f"global_load_dword v{lr[k]}, v[{v_a}:{v_b}], off "
+                f"offset:{4 * k}" for k in range(unroll)]
+        grp += [
+            f"v_mul_lo_u32 v{v_off}, v{v_ib}, s28",   # v_off 用完，改存 po 偏移
+            f"v_add_u32_e32 v{v_off}, v{v_off}, v20",
+            f"v_lshlrev_b32_e32 v{v_off}, 2, v{v_off}",
+            f"v_mov_b32_e32 v{v_tmp}, s28",           # v_tmp 用完，改存 dh*4 步长
+            f"v_lshlrev_b32_e32 v{v_tmp}, 2, v{v_tmp}",
+            *addr(18, 19, v_off),
+        ]
+        for k in range(unroll):
+            if k:
+                grp += [f"v_add_u32_e32 v{v_a}, v{v_a}, v{v_tmp}",
+                        f"v_addc_co_u32_e32 v{v_b}, vcc, v{v_b}, v1, vcc"]
+            grp += [f"global_load_dword v{orr[k]}, v[{v_a}:{v_b}], off"]
+        grp += ["s_waitcnt vmcnt(0)"]
+        for k in range(unroll):
+            grp += weigh(k)
+        grp += [f"s_add_i32 s31, s31, {unroll}", "s_branch L_s"]
+
+    L: list[str] = [
         ".text", f"k_{COMB_NAME}:",
-        "s_load_dwordx2 s[16:17], s[4:5], 0x0",     # out
-        "s_load_dwordx2 s[18:19], s[4:5], 0x8",     # po
-        "s_load_dwordx2 s[20:21], s[4:5], 0x10",    # pm
-        "s_load_dwordx2 s[22:23], s[4:5], 0x18",    # pl
-        "s_load_dword s28, s[4:5], 0x20",           # dh
-        "s_load_dword s29, s[4:5], 0x24",           # nsplit
-        "s_load_dword s30, s[4:5], 0x28",           # inv
+        "s_load_dwordx2 s[16:17], s[4:5], 0x0",       # out
+        "s_load_dwordx2 s[18:19], s[4:5], 0x8",       # po
+        "s_load_dwordx2 s[20:21], s[4:5], 0x10",      # pm
+        "s_load_dwordx2 s[22:23], s[4:5], 0x18",      # pl
+        "s_load_dword s28, s[4:5], 0x20",             # dh
+        "s_load_dword s29, s[4:5], 0x24",             # nsplit
+        "s_load_dword s30, s[4:5], 0x28",             # inv
         "s_waitcnt lgkmcnt(0)",
         "v_mov_b32_e32 v1, 0",
-        "v_mov_b32_e32 v2, s6",                     # head
-        "v_mov_b32_e32 v25, s28",                   # dh（VGPR 版）
+        "v_mov_b32_e32 v2, s6",                       # head
+        "v_mov_b32_e32 v25, s28",                     # dh（VGPR 版）
         "v_cmp_lt_u32_e64 vcc, v0, v25",
         "s_and_saveexec_b64 s[0:1], vcc",
         "s_cbranch_execz L_end",
-        # M = max_s pm[head][s]
-        "v_mov_b32_e32 v3, 0xff800000",
-        "s_mov_b32 s31, 0",
-        "L_m:", "s_cmp_lt_u32 s31, s29",
-        "s_cbranch_scc0 L_m_done",
-        "v_mul_lo_u32 v4, v2, s29",
-        "v_mov_b32_e32 v24, s31",                   # s（VGPR 版）
-        "v_add_u32_e32 v4, v4, v24",
-        "v_lshlrev_b32_e32 v4, 2, v4",
-        "v_mov_b32_e32 v5, s20",
-        "v_mov_b32_e32 v6, s21",
-        "v_add_co_u32_e32 v5, vcc, v5, v4",
-        "v_addc_co_u32_e32 v6, vcc, v6, v1, vcc",
-        "global_load_dword v7, v[5:6], off",
-        "s_waitcnt vmcnt(0)",
-        "v_max_f32_e32 v3, v3, v7",
-        "s_add_i32 s31, s31, 1",
-        "s_branch L_m",
-        "L_m_done:",
-        "v_mov_b32_e32 v10, 0x3fb8aa3b",            # log2(e)
-        "v_mov_b32_e32 v11, s30",                   # inv
-        # 逐维块（dh > 64 时一个 workgroup 要跑多轮）：
-        #   d = i + lane，num/den 归约各分块，最后 out[head][d] = num/den
-        "s_mov_b32 s32, 0",                         # i
-        "L_i:", "s_cmp_lt_u32 s32, s28",
-        "s_cbranch_scc0 L_i_done",
-        "v_mov_b32_e32 v20, s32",
-        "v_add_u32_e32 v20, v20, v0",               # d = i + lane
-        "v_mov_b32_e32 v25, s28",                   # dh（VGPR 版）
-        "v_cmp_lt_u32_e64 vcc, v20, v25",
-        "s_and_saveexec_b64 s[6:7], vcc",
-        "s_cbranch_execz L_i_next",
-        "v_mov_b32_e32 v8, 0",                      # num
-        "v_mov_b32_e32 v9, 0",                      # den
-        "s_mov_b32 s31, 0",
-        "L_s:", "s_cmp_lt_u32 s31, s29",
-        "s_cbranch_scc0 L_s_done",
-        "v_mul_lo_u32 v4, v2, s29",
-        "v_mov_b32_e32 v24, s31",                   # s（VGPR 版）
-        "v_add_u32_e32 v4, v4, v24",
+        # M = max_s pm[head][s]：同样按 4 个分块一组发 load、只等一次
+        "v_mul_lo_u32 v4, v2, s29",                   # head*nsplit（循环不变量）
         "v_lshlrev_b32_e32 v5, 2, v4",
         "v_mov_b32_e32 v6, s20",
         "v_mov_b32_e32 v7, s21",
         "v_add_co_u32_e32 v6, vcc, v6, v5",
         "v_addc_co_u32_e32 v7, vcc, v7, v1, vcc",
-        "global_load_dword v12, v[6:7], off",       # m_s
-        "v_mov_b32_e32 v6, s22",
-        "v_mov_b32_e32 v7, s23",
-        "v_add_co_u32_e32 v6, vcc, v6, v5",
-        "v_addc_co_u32_e32 v7, vcc, v7, v1, vcc",
-        "global_load_dword v13, v[6:7], off",       # l_s
-        "v_mul_lo_u32 v14, v4, s28",
-        "v_add_u32_e32 v14, v14, v20",              # 用 d（= i*64 + lane）
-        "v_lshlrev_b32_e32 v14, 2, v14",
-        "v_mov_b32_e32 v15, s18",
-        "v_mov_b32_e32 v16, s19",
-        "v_add_co_u32_e32 v15, vcc, v15, v14",
-        "v_addc_co_u32_e32 v16, vcc, v16, v1, vcc",
-        "global_load_dword v17, v[15:16], off",     # o_s[head][s][lane]
+        "v_mov_b32_e32 v3, 0xff800000",
+        "s_mov_b32 s31, 0",
+        "L_m:", "s_cmp_lt_u32 s31, s29",
+        "s_cbranch_scc0 L_m_done",
+        "s_add_i32 s33, s31, 3",
+        "s_cmp_lt_u32 s33, s29",
+        "s_cbranch_scc0 L_m_one",
+        "v_mov_b32_e32 v4, s31",
+        "v_lshlrev_b32_e32 v4, 2, v4",
+        "v_add_co_u32_e32 v8, vcc, v6, v4",
+        "v_addc_co_u32_e32 v9, vcc, v7, v1, vcc",
+        "global_load_dword v12, v[8:9], off offset:0",
+        "global_load_dword v13, v[8:9], off offset:4",
+        "global_load_dword v14, v[8:9], off offset:8",
+        "global_load_dword v15, v[8:9], off offset:12",
         "s_waitcnt vmcnt(0)",
-        "v_sub_f32_e32 v18, v12, v3",
-        "v_mul_f32_e32 v18, v18, v11",
-        "v_mul_f32_e32 v18, v18, v10",
-        "s_nop 0",
-        "v_exp_f32_e32 v18, v18",
-        "s_nop 0",
-        "v_fma_f32 v8, v18, v17, v8",
-        "v_fma_f32 v9, v18, v13, v9",
+        "v_max_f32_e32 v3, v3, v12",
+        "v_max_f32_e32 v3, v3, v13",
+        "v_max_f32_e32 v3, v3, v14",
+        "v_max_f32_e32 v3, v3, v15",
+        "s_add_i32 s31, s31, 4",
+        "s_branch L_m",
+        "L_m_one:",
+        "v_mov_b32_e32 v4, s31",
+        "v_lshlrev_b32_e32 v4, 2, v4",
+        "v_add_co_u32_e32 v8, vcc, v6, v4",
+        "v_addc_co_u32_e32 v9, vcc, v7, v1, vcc",
+        "global_load_dword v12, v[8:9], off",
+        "s_waitcnt vmcnt(0)",
+        "v_max_f32_e32 v3, v3, v12",
         "s_add_i32 s31, s31, 1",
-        "s_branch L_s",
+        "s_branch L_m",
+        "L_m_done:",
+        "v_mov_b32_e32 v10, 0x3fb8aa3b",              # log2(e)
+        "v_mov_b32_e32 v11, s30",                     # inv
+        # 逐维块（dh > 64 时一个 workgroup 要跑多轮）：
+        #   d = i + lane，num/den 归约各分块，最后 out[head][d] = num/den
+        "s_mov_b32 s32, 0",                           # i
+        "L_i:", "s_cmp_lt_u32 s32, s28",
+        "s_cbranch_scc0 L_i_done",
+        "v_mov_b32_e32 v20, s32",
+        "v_add_u32_e32 v20, v20, v0",                 # d = i + lane
+        "v_mov_b32_e32 v25, s28",                     # dh（VGPR 版）
+        "v_cmp_lt_u32_e64 vcc, v20, v25",
+        "s_and_saveexec_b64 s[6:7], vcc",
+        "s_cbranch_execz L_i_next",
+        "v_mov_b32_e32 v8, 0",                        # num
+        "v_mov_b32_e32 v9, 0",                        # den
+        "s_mov_b32 s31, 0",
+        "L_s:", "s_cmp_lt_u32 s31, s29",
+        "s_cbranch_scc0 L_s_done",
+    ]
+    if unroll > 1:
+        L += [f"s_add_i32 s33, s31, {unroll - 1}",    # s+unroll-1 < nsplit ?
+              "s_cmp_lt_u32 s33, s29",
+              "s_cbranch_scc0 L_s_one"]
+        L += grp
+        L += ["L_s_one:"]
+    L += one
+    L += [
         "L_s_done:",
         "s_nop 0",
         "v_rcp_f32_e32 v19, v9",
@@ -638,7 +735,8 @@ def gen_comb_asm() -> str:
         "L_end:",
         "s_or_b64 exec, exec, s[0:1]",
         "s_endpgm",
-    ]) + "\n"
+    ]
+    return "\n".join(L) + "\n"
 
 
 def build_flash(tag: str = "fdec"):
