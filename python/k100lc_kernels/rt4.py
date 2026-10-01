@@ -213,24 +213,33 @@ class W4Runner:
             self.rt.free(p)
         self._bufs.clear()
 
-    def gemv_device(self, kind: str, wq: int, ws: int, x: np.ndarray,
+    def gemv_device(self, kind: str, wq: int, ws: int, x: np.ndarray | None,
                     n: int, k: int, threads: int = 256,
-                    upload: bool = True) -> int:
+                    upload: bool = True, x_dev: int | None = None,
+                    y_dev: int | None = None, m: int | None = None,
+                    sync: bool = True) -> int:
         """同 `gemv`，但只做设备侧工作并返回 y 的设备指针（不下载）。
 
         `upload=False` 用于反复计时的场景：调用方先 `upload=True` 一次，
         之后每轮只跑「激活量化 + GEMV + sync」，把主机→设备传输排除在外。
+
+        `x_dev` 直接给设备上的 x 指针（此时 `x` 可为 None），用于把多个层
+        串成一条队列；`sync=False` 时不等待，调用方在整层/整步末尾统一 sync。
         """
-        x = np.ascontiguousarray(x, dtype=np.float32)
-        if x.ndim != 2 or x.shape[1] != k:
-            raise ValueError(f"x 形状 {x.shape}，期望 [M,{k}]")
-        m = x.shape[0]
+        if x_dev is None:
+            x = np.ascontiguousarray(x, dtype=np.float32)
+            if x.ndim != 2 or x.shape[1] != k:
+                raise ValueError(f"x 形状 {x.shape}，期望 [M,{k}]")
+            m = x.shape[0]
+        else:
+            if m is None:
+                raise ValueError("x_dev 模式需要同时指定 m（x 的行数）")
         if m not in (1, 2, 3, 4):
             raise ValueError(f"W4 GEMV 只支持 M=1..4（当前 {m}），预填充请走 GEMM")
         nwarp = threads // 64
-        px = self._buf("x", m * k * 4)
-        py = self._buf("y", m * n * 4)
-        if upload:
+        px = int(x_dev) if x_dev is not None else self._buf("x", m * k * 4)
+        py = int(y_dev) if y_dev is not None else self._buf("y", m * n * 4)
+        if upload and x_dev is None:
             self.rt.upload(px, x.reshape(-1))
         if kind == "w4a8":
             if k % GRP:
@@ -265,7 +274,8 @@ class W4Runner:
                            [wq, ws, aq, asc, py, n, k])
         else:
             raise ValueError(f"未知 W4 通路 {kind!r}（用 w4a8 / w4a4）")
-        self.rt.sync()
+        if sync:
+            self.rt.sync()
         return py
 
     def gemv(self, kind: str, wq: int, ws: int, x: np.ndarray,
@@ -275,9 +285,11 @@ class W4Runner:
         py = self.gemv_device(kind, wq, ws, x, n, k, threads)
         return self.rt.download(py, x.shape[0] * n, np.float32).reshape(x.shape[0], n)
 
-    def gemm_device(self, wq: int, wsc: int, x: np.ndarray, n: int, k: int,
+    def gemm_device(self, wq: int, wsc: int, x: np.ndarray | None, n: int, k: int,
                     threads: int = 256, upload: bool = True,
-                    quantize: bool = True) -> int:
+                    quantize: bool = True, x_dev: int | None = None,
+                    c_dev: int | None = None, m: int | None = None,
+                    sync: bool = True) -> int:
         """预填充最强算力路径：int4×int4 GEMM（`v_dot8_i32_i4`）。
 
         `wq,wsc` 来自 `RT4File.upload_weight_gemm`；`x` [M,K] f32，M 必须是
@@ -290,21 +302,25 @@ class W4Runner:
         `quantize=False`（配合先跑一次 `quantize=True`）只计 GEMM 本体，
         用于把「激活量化」与「最强算力 GEMM」分开计时。
         """
-        x = np.ascontiguousarray(x, dtype=np.float32)
-        if x.ndim != 2 or x.shape[1] != k:
-            raise ValueError(f"x 形状 {x.shape}，期望 [M,{k}]")
-        m = x.shape[0]
+        if x_dev is None:
+            x = np.ascontiguousarray(x, dtype=np.float32)
+            if x.ndim != 2 or x.shape[1] != k:
+                raise ValueError(f"x 形状 {x.shape}，期望 [M,{k}]")
+            m = x.shape[0]
+        else:
+            if m is None:
+                raise ValueError("x_dev 模式需要同时指定 m（x 的行数）")
         if m % self.BM:
             raise ValueError(f"GEMM 要求 M 是 {self.BM} 的整数倍（当前 {m}）")
         if n % self.BN:
             raise ValueError(f"GEMM 要求 N 是 {self.BN} 的整数倍（当前 {n}）")
         if k % self.QG:
             raise ValueError(f"GEMM 要求 K 是 {self.QG} 的整数倍（当前 {k}）")
-        px = self._buf("gx", m * k * 4)
+        px = int(x_dev) if x_dev is not None else self._buf("gx", m * k * 4)
         paq = self._buf("gaq", m * k // 2)
         pasc = self._buf("gasc", (k // self.QG) * m * 4)
-        pc = self._buf("gc", m * n * 4)
-        if upload:
+        pc = int(c_dev) if c_dev is not None else self._buf("gc", m * n * 4)
+        if upload and x_dev is None:
             self.rt.upload(px, x.reshape(-1))
         nq = k // self.QG                       # quant_rows_k 的 workgroup 大小
         nbn = n // self.BN
@@ -317,7 +333,8 @@ class W4Runner:
             self.rt.launch("gemm_w4a4_flat", grid, threads,
                            [paq, wq, pasc, wsc, pc, m, n, k,
                             nbn, _div_magic(nbn, grid)])
-            self.rt.sync()
+            if sync:
+                self.rt.sync()
             return pc
         # nbn == 1：回退到按 128 行拆的 1D 启动
         for t in range(m // self.BM):
@@ -330,7 +347,8 @@ class W4Runner:
                                [aq_t, sc_t, x_t, k, self.QG, self.BM, k, 0, nq])
             self.rt.launch("gemm_w4a4", n // self.BN, threads,
                            [aq_t, wq, sc_t, wsc, c_t, self.BM, n, k])
-        self.rt.sync()
+        if sync:
+            self.rt.sync()
         return pc
 
     def gemm(self, wq: int, wsc: int, x: np.ndarray, n: int, k: int,

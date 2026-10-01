@@ -1,0 +1,236 @@
+# 模型级运行时（model.py）
+
+`k100lc_kernels.model` 把内核包成可直接组合的推理算子，覆盖 AI 模型解码
+阶段的主要开销：线性层（f32 / INT4 / GGUF / RT4）、RMSNorm、SwiGLU/MLP、
+MoE 专家合并、KV cache 与采样。
+
+它的目标不是替代模型框架，而是提供一个 **可复用、可计时、可对账** 的
+最小执行层：权重上传一次、工作缓冲复用、一次 forward 只 sync 一次。
+
+```bash
+source env.sh
+python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024
+```
+
+实测输出（K100_LC，合成权重）：
+
+```
+[f32 ] rows=4 dim=512 ffn=1024 max_rel=3.59e-07 time=0.218 ms
+[int4] rows=4 dim=512 ffn=1024 max_rel=3.70e-07 time=0.290 ms
+[moe ] rows=4 dim=512 n_exp=4 max_rel=4.50e-08 time=0.020 ms
+[gguf] q4_0   n=16 k=512 max_rel=4.04e-07
+[gguf] iq4nl  n=16 k=512 max_rel=3.46e-07
+全部对账通过 ✔
+```
+
+## 1. 组件
+
+| 类 / 函数 | 作用 | 主要内核 |
+|---|---|---|
+| `Workspace` | 按 key 复用设备缓冲，避免逐层 alloc/free | — |
+| `F32Linear` | f32 权重线性层，M=1..4 每行一次 GEMV | `gemv_f32_warp_k` |
+| `DotLinear` | 量化权重原生解码 + 点积 | `*_dot_k` + `reduce_blocks_k` |
+| `RT4Linear` | RT4 INT4 权重（W4A8 / W4A4） | `quant_act*` / `gemv_w4a*` |
+| `RMSNorm` | `rmsnorm_k`，`flag=0` 使用 `w` | `rmsnorm_k` |
+| `SwiGLU` / `MLP` | 门控 MLP，kernel 连续入队 | `silu_mul_k` |
+| `MoECombine` | 专家输出加权合并 | `moe_combine_k` |
+| `KVCache` | f32 KV 追加（`copy_dev` 编排） | — |
+| `Sampler` | 设备 argmax + 主机 top-k / top-p | `argmax_k` |
+
+## 2. 执行模型
+
+`Runtime` 是单队列 in-order；同一个 forward 里的 kernel 可以全部入队，最后
+只 `sync()` 一次。这是 `model.py` 的核心约定：
+
+```python
+def forward_device(x_dev, rows, sync=False):
+    h1 = gate.forward_device(x_dev, rows, sync=False)
+    h2 = up.forward_device(x_dev, rows, sync=False)
+    act = swiglu.forward_device(h1, h2, rows * gate.n, sync=False)
+    out = down.forward_device(act, rows, sync=False)
+    if sync:
+        rt.sync()
+    return out
+```
+
+对比「每个 kernel 后 sync 一次」，这样能把每个算子一次的设备同步 + Python
+调度开销省掉。实测一次 launch 的固定开销约 **7 us**（Python + HSA 投递），
+所以层数多、算子碎时收益明显。
+
+完整 MLP 示例：
+
+```python
+from k100lc_kernels import Runtime, Workspace
+from k100lc_kernels.model import F32Linear, MLP, RMSNorm
+
+rt = Runtime()
+ws = Workspace(rt)
+norm = RMSNorm(rt, dim, w_norm, 1e-6, ws, "norm0")
+mlp = MLP(rt,
+          F32Linear(rt, ffn, dim, w_gate, ws, "gate0"),
+          F32Linear(rt, ffn, dim, w_up,   ws, "up0"),
+          F32Linear(rt, dim, ffn, w_down, ws, "down0"),
+          ws, "mlp0")
+
+x_dev = ...                       # 上一层输出的设备指针
+h = norm.forward_device(x_dev, rows, sync=False)
+y_dev = mlp.forward_device(h, rows, sync=True)
+```
+
+## 3. 权重格式与加载
+
+### 3.1 f32
+
+```python
+lin = F32Linear(rt, n, k, w_f32, ws, "gate")
+```
+
+### 3.2 compressed-tensors INT4（W4A16，group 128）
+
+直接吃 checkpoint 的 `weight_packed`（I32）+ `weight_scale`（BF16）原始字节：
+
+```python
+from k100lc_kernels import DotLinear
+
+packed = open("weight_packed.bin", "rb").read()
+scale = open("weight_scale.bin", "rb").read()
+lin = DotLinear(rt, n, k, "int4", packed, (scale,), ws, "gate")
+```
+
+也可以把 f32 权重现场量化（用于实验 / 对账）：
+
+```python
+from k100lc_kernels import pack_int4_group128, dequant_int4_group128
+
+packed, scale = pack_int4_group128(w_f32)       # w_f32: [N,K], K%128==0
+ref = dequant_int4_group128(packed, scale, n, k)
+```
+
+### 3.3 GGUF 原生编码
+
+`DotLinear` 支持 `QUANT_SPECS` 里的 11 类编码 + `int4`：
+
+```python
+from k100lc_kernels.model import QUANT_SPECS
+print(sorted(QUANT_SPECS))
+# ['int4','iq2s','iq3s','iq3xxs','iq4nl','iq4xs','q2_0','q4_0','q4k','q5k','q6k','q8_0']
+
+lin = DotLinear(rt, n, k, "q4k", raw_bytes, (), ws, "ffn_gate")
+# iq2s/iq3s 需要 1 张网格表；iq3xxs 需要网格表 + 符号表：
+# lin = DotLinear(rt, n, k, "iq3xxs", raw, (grid_bytes, ksigns_bytes), ws, "gate")
+```
+
+### 3.4 RT4 INT4（W4A8 / W4A4）
+
+```python
+from k100lc_kernels import RT4File, W4Runner
+
+runner = W4Runner(rt)
+with RT4File("/path/model.rt4") as f:
+    t = f.tensor("model.layers.0.mlp.gate_proj.weight")
+    wq, ws_s = f.upload_weight(rt, t)             # W4A8/W4A4 GEMV 用 f16 尺度
+    lin = RT4Linear(rt, t.shape[0], t.shape[1], wq, ws_s, "w4a8", runner)
+    y = lin.forward(x)
+```
+
+预填充用 `upload_weight_gemm` + `W4Runner.gemm`（M 必须是 128 的倍数）。
+
+## 4. MoE
+
+三件套：
+
+1. `router_top10_k`：logits → top-10 专家 id + 权重；
+2. 每个专家的线性层（`DotLinear` / `RT4Linear`）；
+3. `moe_combine_k`：按 router 权重把专家输出加权求和。
+
+先用「所有专家 × 全部行」的稠密方式跑专家，再合并；对小批解码（M≤4）足够
+简单，也避免了主机侧 gather：
+
+```python
+from k100lc_kernels.model import MoECombine
+
+moe = MoECombine(rt, rows, dim, n_sel, ws, "moe0")
+for e, expert in enumerate(selected_experts):
+    expert.forward_device(x_dev, rows, out_dev=moe.slot(e), sync=False)
+rt.upload(moe.weights, router_weights)          # [rows, n_sel]
+y_dev = moe.forward_device(sync=True)
+```
+
+`moe_combine_k` 是 1D 启动（grid = ceil(rows*dim/64)），`exp_out` 布局为
+`[n_exp, rows, dim]`，权重布局为 `[rows, n_exp]`。
+
+## 5. KV cache
+
+`KVCache` 用 `copy_dev` 把新 token 的 K/V 追加到 `[max_len, dim]` 槽：
+
+```python
+from k100lc_kernels.model import KVCache
+
+cache = KVCache(rt, dim=n_kv_heads * head_dim, max_len=4096, ws=ws, tag="kv7")
+cache.append_device(k_dev, v_dev, rows, sync=False)   # k_dev/v_dev 是 [rows,dim]
+# cache.k / cache.v 是设备指针，cache.length 是当前长度
+```
+
+需要 int8/int4 KV 或融合 attention 时，用内核包里的 `kv_append_k_k` /
+`kv_append_v_k` / `fa_decode_k` 系列，参数见
+[`KERNELS.md`](KERNELS.md) 与 [`KERNEL_CALLING.md`](KERNEL_CALLING.md)。
+
+> 局限：包里目前没有把完整 attention 层（QKV 打包 + RoPE + KV 追加 +
+> FlashAttention + 输出投影）封装成一个 Python attention 类，因为各模型的
+> QKV 布局与 head 配置不同；这些内核仍然可以逐个调用。
+
+## 6. 采样
+
+```python
+from k100lc_kernels.model import Sampler
+
+tok = Sampler.greedy(logits)                          # [rows]
+tok = Sampler.sample(logits, temperature=0.8, top_k=50, top_p=0.95)
+idx_dev = Sampler(rt, ws).argmax_device(logits_dev, rows, vocab)
+```
+
+## 7. 效率实践
+
+真实形状实测（`tools/bench_model_paths.py`，`N=17408 K=5120`，
+合成权重）：
+
+| 路径 | 权重显存 | M=1 每层 | 等效带宽 | M=4 每层 |
+|---|---:|---:|---:|---:|
+| f32 (`gemv_f32_warp_k`) | 356.5 MB | 0.701 ms | 508 GB/s | 2.799 ms |
+| INT4 W4A16 (`int4_dot_k`) | 46.0 MB | **0.240 ms** | 192 GB/s | **0.917 ms** |
+
+同一份权重，INT4 路径 M=1 快 **2.93×**、M=4 快 **3.05×**；400 个同形状层的
+权重流时间从 f32 的 **280.6 ms/token** 降到 INT4 的 **95.9 ms/token**。
+INT4 的等效带宽看起来低，是因为它受 4bit 解码指令吞吐限制（见
+[`INT4.md`](INT4.md) 第 5.3 节），不是访存限制。
+
+| 实践 | 原因 |
+|---|---|
+| 权重只 `upload` 一次，常驻显存 | 解码是权重带宽受限，重复上传会走 PCIe |
+| 用 `Workspace` 复用中间张量 | 避免逐 token / 逐层 `alloc/free` |
+| 一次 forward 只 `sync` 一次 | 单队列 in-order，逐算子 sync 只是浪费 |
+| 解码 M=1..4 走 GEMV；预填充 M≥128 走 GEMM | W4A4 GEMM 实测 45 TMAC/s，GEMV 是带宽通路 |
+| 减少 launch 次数 | 实测每次 launch 固定开销约 7 us，400 层 × 多次很容易到毫秒级 |
+| 权重量化到 INT4/RT4 | 显存与带宽直接降 4~8 倍；精度换速度 |
+| MoE 用 `ids`/`stride` 一次覆盖多个专家 | 避免逐专家重复启动 |
+
+## 8. 已知限制
+
+* `rmsnorm_k` / `softmax_k` / `layernorm_k` 要求 `dim % 64 == 0`。
+* `*_dot_k` 的 `rows_per_exp = 1`（每个 x 行一组）无法用 32 位魔法除表示；
+  dense 层请传 `rows_per_exp = N`（`DotLinear` 已经这样做）。
+* `private_segment > 0` 的 GDN / `fa_int4` / `vit_attn_kernel` 当前运行时
+  没有 scratch backing，不能直接跑。
+* 2D grid 的 y 维第二个 workgroup 写入不可靠；用 1D 拆行或 flat 内核。
+* `KVCache` 是 f32 主机编排版；打包 KV 请用 `kv_append_*` 内核。
+
+## 9. 验证
+
+```bash
+source env.sh
+python3 examples/python_model_layer.py --rows 1
+python3 examples/python_model_layer.py --rows 4 --dim 1024 --ffn 2048
+```
+
+脚本会把 f32 / INT4 MLP 与 MoE 合并分别与 NumPy 参考对账，并输出每步耗时；
+相对误差大于 `1e-4` 时返回非零退出码。

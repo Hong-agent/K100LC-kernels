@@ -65,6 +65,29 @@ class Runtime:
             raise RuntimeError(f"fm_init 失败: {hsaco}")
         self.hsaco = pathlib.Path(hsaco)
         self.catalog = self._load_catalog(catalog)
+        # 每次 launch 的固定开销优化：缓存编码后的内核名，复用 argv 缓冲
+        # （fm_launch 在返回前就把 argv 拷进 kernarg，所以复用是安全的）。
+        self._name_cache: dict[str, bytes] = {}
+        self._argv_buf = (ctypes.c_uint64 * 64)()
+
+    def _cname(self, kernel: str) -> bytes:
+        b = self._name_cache.get(kernel)
+        if b is None:
+            b = kernel.encode()
+            self._name_cache[kernel] = b
+        return b
+
+    def _pack_argv(self, argv) -> tuple:
+        n = len(argv)
+        buf = self._argv_buf
+        if n > len(buf):
+            buf = self._argv_buf = (ctypes.c_uint64 * n)()
+        for i, v in enumerate(argv):
+            if type(v) is float:
+                buf[i] = struct.unpack("<I", struct.pack("<f", v))[0]
+            else:
+                buf[i] = v
+        return buf
 
     def _load_catalog(self, catalog):
         if catalog is not None:
@@ -114,13 +137,13 @@ class Runtime:
             raise RuntimeError("fm_memset 失败")
 
     def launch(self, kernel: str, grid: int, workgroup: int, argv: list) -> None:
-        a = (ctypes.c_uint64 * len(argv))(*[_pack(v) for v in argv])
-        if self._lib.fm_launch(kernel.encode(), grid, workgroup, a, len(argv)) != 0:
+        a = self._pack_argv(argv)
+        if self._lib.fm_launch(self._cname(kernel), grid, workgroup, a, len(argv)) != 0:
             raise RuntimeError(f"fm_launch({kernel}) 失败")
 
     def launch2d(self, kernel: str, gx: int, gy: int, wx: int, wy: int, argv: list) -> None:
-        a = (ctypes.c_uint64 * len(argv))(*[_pack(v) for v in argv])
-        if self._lib.fm_launch2d(kernel.encode(), gx, gy, wx, wy, a, len(argv)) != 0:
+        a = self._pack_argv(argv)
+        if self._lib.fm_launch2d(self._cname(kernel), gx, gy, wx, wy, a, len(argv)) != 0:
             raise RuntimeError(f"fm_launch2d({kernel}) 失败")
 
     def _find(self, kernel: str) -> dict:
@@ -140,7 +163,7 @@ class Runtime:
             layout[3 * i + 0] = int(a.get("off", a.get(".offset", 0)))
             layout[3 * i + 1] = int(a.get("size", a.get(".size", 0)))
             layout[3 * i + 2] = KINDS.get(vk, 0)
-        a = (ctypes.c_uint64 * len(argv))(*[_pack(v) for v in argv])
+        a = self._pack_argv(argv)
         rc = self._lib.fm_launch_dyn(
             str(k.get("name", kernel)).encode(), gx, gy, wx, wy, layout, len(args),
             int(k.get("group_segment", 0)), int(k.get("private_segment", 0)),

@@ -1,7 +1,7 @@
 # ABI 与调用约定
 
 本文只讲二进制接口和运行时约定。逐类调用配方见
-[`KERNEL_CALLING.md`](KERNEL_CALLING.md)，119 个内核的逐参数表见
+[`KERNEL_CALLING.md`](KERNEL_CALLING.md)，120 个内核的逐参数表见
 [`KERNELS.md`](KERNELS.md)。
 
 ## 1. 内核目录（catalog）
@@ -130,7 +130,7 @@ python3 tools/make_catalog.py merged.hsaco merged.catalog.json
 | `gelu_mul_k` | `y=gelu(a)*b` | `(y,a,b,n,64)` |
 | `softmax_k` | 行 softmax | `(y,x,rows,cols,64)` |
 | `layernorm_k` | LayerNorm | `(y,x,w,b,rows,cols,eps,64)` |
-| `rmsnorm_k` | RMSNorm | `(y,x,w,cols,eps,flag)`，grid=rows |
+| `rmsnorm_k` | RMSNorm | `(y,x,w,cols,eps,flag)`，grid=rows；`flag=0` 使用 `w` |
 | `topk_k` | 行 top-k | `(x,idx,val,rows,cols,k)` |
 | `router_top10_k` | MoE top-10 + softmax | `(logits,ids,weights,rows,n_experts)` |
 | `reduce_blocks_k` | `partial` 行归约 | `(partial,y,nrows,nbpr)` |

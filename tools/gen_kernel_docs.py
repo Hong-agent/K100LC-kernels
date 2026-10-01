@@ -30,7 +30,7 @@ CATEGORIES = [
     ("GEMV / GEMM", lambda n: n.startswith(("gemv_", "gemm_"))),
     ("Transformer 常用算子",
      lambda n: n.startswith(("rmsnorm", "layernorm", "softmax", "topk",
-                             "router_", "rope", "embed", "silu", "gelu",
+                             "router_", "moe_", "rope", "embed", "silu", "gelu",
                              "sigmoid", "l2norm", "scale_", "fill_", "add_",
                              "concat", "argmax"))),
     ("Attention / KV / 视觉塔",

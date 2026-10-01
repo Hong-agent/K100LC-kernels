@@ -61,6 +61,12 @@ def div_magic(d: int, max_i: int) -> int:
         raise ValueError("div_magic: d 必须为正")
     if max_i <= 0:
         return 0
+    if d == 1:
+        # 除数为 1 时商就是被除数，32 位魔法乘无法表示；只有被除数恒为 0
+        # （max_i <= 1）时才能用 0 代替。
+        if max_i <= 1:
+            return 0
+        raise ValueError(f"div_magic: d=1 只在下标恒为 0 时可用（max_i={max_i}）")
     m = (1 << 32) // d + 1
     if m >= (1 << 32):
         raise ValueError(f"div_magic: d={d} 太大（商溢出）")

@@ -120,7 +120,7 @@ rt.upload(pid, np.arange(lin.n, dtype=np.uint32))
 
 nblocks, nbpr = lin.n * lin.nbpr, lin.nbpr
 m_nbpr = div_magic(nbpr, nblocks)
-m_rows = div_magic(lin.n, lin.n + 1)
+m_rows = div_magic(lin.n, lin.n)
 rt.launch("int4_dot_k", (nblocks + 63) // 64, 64,
           [pw, px, pp, nblocks, 64, nbpr, m_nbpr, lin.n, m_rows,
            ps, pid, nbpr * 64, lin.n, m_rows])

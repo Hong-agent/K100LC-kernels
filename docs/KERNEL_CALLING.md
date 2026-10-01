@@ -4,6 +4,10 @@
 打包、grid / workgroup 语义，到每一类内核的调用配方。逐内核的参数偏移与
 类型请看自动生成的 [`KERNELS.md`](KERNELS.md)。
 
+如果只是想在自己的模型里用这些内核，先看
+[`MODEL_RUNTIME.md`](MODEL_RUNTIME.md)：那里有 `DotLinear` / `MLP` /
+`MoECombine` 等现成封装。
+
 ## 0. 最短路径
 
 ```python
@@ -376,11 +380,12 @@ rt.launch("gelu_mul_k", (n + 63) // 64, 64, [py, pg, pu, n, 64])
 
 | lookup | argv | grid / workgroup | 约束 |
 |---|---|---|---|
-| `rmsnorm_k` | `(y, x, w, cols, eps, flag)` | grid=rows，wg=64 | `cols % 64 == 0`；汇编里 `flag=0` 用 `1+w`，非 0 用 `w` |
+| `rmsnorm_k` | `(y, x, w, cols, eps, flag)` | grid=rows，wg=64 | `cols % 64 == 0`；实测 `flag=0` 使用 `w`，非 0 使用 `1+w` |
 | `layernorm_k` | `(y, x, w, b, rows, cols, eps, 64)` | grid=rows，wg=64 | `cols % 64 == 0` |
 | `softmax_k` | `(y, x, rows, cols, 64)` | grid=rows，wg=64 | `cols % 64 == 0` |
 | `topk_k` | `(x, idx, val, rows, cols, k)` | `ceil(rows/64)`，wg=64 | `k <= 16` |
 | `router_top10_k` | `(logits, ids, weights, rows, n_experts)` | grid=rows，wg=64 | 固定 top-10 |
+| `moe_combine_k` | `(y, exp_out, weights, n_exp, rows, dim, magic_dim)` | `ceil(rows*dim/64)`，wg=64 | 专家输出加权合并 |
 | `argmax_k` | `(x, n, idx)` | grid-stride | 单行 argmax |
 
 ```python
@@ -388,6 +393,11 @@ rt.launch("rmsnorm_k", rows, 64, [py, px, pw, cols, 1e-6, flag])
 rt.launch("softmax_k", rows, 64, [py, px, rows, cols, 64])
 rt.launch("topk_k", (rows + 63) // 64, 64, [px, pidx, pval, rows, cols, 16])
 rt.launch("router_top10_k", rows, 64, [plogits, pids, pweights, rows, n_experts])
+
+# MoE 合并：y[r,:] = sum_e weights[r,e] * exp_out[e,r,:]
+# exp_out 布局 [n_exp, rows, dim]，grid = ceil(rows*dim/64)
+rt.launch("moe_combine_k", (rows * dim + 63) // 64, 64,
+          [py, pexp, pweights, n_exp, rows, dim, div_magic(dim, rows * dim)])
 ```
 
 ### 6.3 f32 / int8 通用 GEMV
@@ -433,6 +443,10 @@ ids, stride, rows_per_w, magic_rpw
 | `rows_per_w` | 权重侧每个专家组几行；dense 传总行数 |
 | `magic_rpw` | `i / rows_per_w` 的魔法乘数 |
 
+> `rows_per_exp = 1`（每个 x 行自成专家组）需要「除以 1 得到被除数」，
+> 32 位魔法乘无法表示，这类配置当前不支持。dense 单矩阵用
+> `rows_per_exp = rows_per_w = N`，此时 `ew` 恒为 0。
+
 块布局：
 
 | lookup | 块元素 | 块字节 | 额外表 |
@@ -467,8 +481,8 @@ from gen_gemv_qdot import div_magic   # tools/ 在 PYTHONPATH 上；也可自己
 nbpr = k // 128
 nblocks = rows * nbpr
 argv = [pw, px, pp, nblocks, 64, nbpr, div_magic(nbpr, nblocks),
-        rows, div_magic(rows, rows + 1),
-        pscale, pids, nbpr * 64, rows, div_magic(rows, rows + 1)]
+        rows, div_magic(rows, rows),
+        pscale, pids, nbpr * 64, rows, div_magic(rows, rows)]
 rt.launch("int4_dot_k", (nblocks + 63) // 64, 64, argv)
 rt.launch("reduce_blocks_k", (rows + 63) // 64, 64, [pp, py, rows, nbpr])
 ```
@@ -667,7 +681,7 @@ PY
 
 ```bash
 source env.sh
-python3 -m k100lc_kernels list | wc -l        # 119
+python3 -m k100lc_kernels list | wc -l        # 120
 python3 examples/python_gemv.py               # max_abs 应在 1e-4 量级
 python3 tools/gen_kernel_docs.py              # 重新生成 docs/KERNELS.md
 python3 compiler/tests/test_examples.py

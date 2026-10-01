@@ -1949,106 +1949,116 @@ static const RtArg k_args_101[] = {
 static const RtArg k_args_102[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {20u, 4u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_103[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 8u, 0},   // by_value/global
-    {24u, 4u, 0},   // by_value/global
-    {28u, 4u, 0},   // by_value/global
-    {32u, 4u, 0},   // by_value/global
-    {36u, 4u, 0},   // by_value/global
-    {40u, 4u, 0},   // by_value/global
-    {44u, 4u, 0},   // by_value/global
-    {48u, 8u, 0},   // by_value/global
-    {56u, 4u, 0},   // by_value/global
-    {60u, 4u, 0},   // by_value/global
-    {64u, 4u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_104[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {20u, 4u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
+    {40u, 4u, 0},   // by_value/global
+    {44u, 4u, 0},   // by_value/global
+    {48u, 8u, 0},   // by_value/global
+    {56u, 4u, 0},   // by_value/global
+    {60u, 4u, 0},   // by_value/global
+    {64u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_105[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 8u, 0},   // by_value/global
-    {24u, 4u, 0},   // by_value/global
-    {28u, 4u, 0},   // by_value/global
-    {32u, 4u, 0},   // by_value/global
-    {36u, 4u, 0},   // by_value/global
-    {40u, 4u, 0},   // by_value/global
-    {44u, 4u, 0},   // by_value/global
-    {48u, 8u, 0},   // by_value/global
-    {56u, 4u, 0},   // by_value/global
-    {60u, 4u, 0},   // by_value/global
-    {64u, 4u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_106[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {24u, 4u, 1},   // hidden_block_count_x
-    {28u, 4u, 2},   // hidden_block_count_y
-    {32u, 4u, 3},   // hidden_block_count_z
-    {36u, 2u, 4},   // hidden_group_size_x
-    {38u, 2u, 5},   // hidden_group_size_y
-    {40u, 2u, 6},   // hidden_group_size_z
-    {42u, 2u, 7},   // hidden_remainder_x
-    {44u, 2u, 8},   // hidden_remainder_y
-    {46u, 2u, 9},   // hidden_remainder_z
-    {48u, 8u, 10},   // hidden_global_offset_x
-    {56u, 8u, 11},   // hidden_global_offset_y
-    {64u, 8u, 12},   // hidden_global_offset_z
-    {72u, 2u, 13},   // hidden_grid_dims
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
+    {40u, 4u, 0},   // by_value/global
+    {44u, 4u, 0},   // by_value/global
+    {48u, 8u, 0},   // by_value/global
+    {56u, 4u, 0},   // by_value/global
+    {60u, 4u, 0},   // by_value/global
+    {64u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_107[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 8u, 0},   // by_value/global
-    {24u, 4u, 0},   // by_value/global
-    {28u, 4u, 0},   // by_value/global
-    {32u, 4u, 0},   // by_value/global
-    {36u, 4u, 0},   // by_value/global
-    {40u, 4u, 0},   // by_value/global
-    {44u, 4u, 0},   // by_value/global
-    {48u, 8u, 0},   // by_value/global
-    {56u, 4u, 0},   // by_value/global
-    {60u, 4u, 0},   // by_value/global
-    {64u, 4u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {24u, 4u, 1},   // hidden_block_count_x
+    {28u, 4u, 2},   // hidden_block_count_y
+    {32u, 4u, 3},   // hidden_block_count_z
+    {36u, 2u, 4},   // hidden_group_size_x
+    {38u, 2u, 5},   // hidden_group_size_y
+    {40u, 2u, 6},   // hidden_group_size_z
+    {42u, 2u, 7},   // hidden_remainder_x
+    {44u, 2u, 8},   // hidden_remainder_y
+    {46u, 2u, 9},   // hidden_remainder_z
+    {48u, 8u, 10},   // hidden_global_offset_x
+    {56u, 8u, 11},   // hidden_global_offset_y
+    {64u, 8u, 12},   // hidden_global_offset_z
+    {72u, 2u, 13},   // hidden_grid_dims
 };
 
 static const RtArg k_args_108[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {24u, 4u, 1},   // hidden_block_count_x
-    {28u, 4u, 2},   // hidden_block_count_y
-    {32u, 4u, 3},   // hidden_block_count_z
-    {36u, 2u, 4},   // hidden_group_size_x
-    {38u, 2u, 5},   // hidden_group_size_y
-    {40u, 2u, 6},   // hidden_group_size_z
-    {42u, 2u, 7},   // hidden_remainder_x
-    {44u, 2u, 8},   // hidden_remainder_y
-    {46u, 2u, 9},   // hidden_remainder_z
-    {48u, 8u, 10},   // hidden_global_offset_x
-    {56u, 8u, 11},   // hidden_global_offset_y
-    {64u, 8u, 12},   // hidden_global_offset_z
-    {72u, 2u, 13},   // hidden_grid_dims
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
+    {40u, 4u, 0},   // by_value/global
+    {44u, 4u, 0},   // by_value/global
+    {48u, 8u, 0},   // by_value/global
+    {56u, 4u, 0},   // by_value/global
+    {60u, 4u, 0},   // by_value/global
+    {64u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_109[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {24u, 4u, 1},   // hidden_block_count_x
+    {28u, 4u, 2},   // hidden_block_count_y
+    {32u, 4u, 3},   // hidden_block_count_z
+    {36u, 2u, 4},   // hidden_group_size_x
+    {38u, 2u, 5},   // hidden_group_size_y
+    {40u, 2u, 6},   // hidden_group_size_z
+    {42u, 2u, 7},   // hidden_remainder_x
+    {44u, 2u, 8},   // hidden_remainder_y
+    {46u, 2u, 9},   // hidden_remainder_z
+    {48u, 8u, 10},   // hidden_global_offset_x
+    {56u, 8u, 11},   // hidden_global_offset_y
+    {64u, 8u, 12},   // hidden_global_offset_z
+    {72u, 2u, 13},   // hidden_grid_dims
+};
+
+static const RtArg k_args_110[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
     {24u, 4u, 0},   // by_value/global
     {28u, 4u, 0},   // by_value/global
@@ -2062,7 +2072,7 @@ static const RtArg k_args_109[] = {
     {64u, 4u, 0},   // by_value/global
 };
 
-static const RtArg k_args_110[] = {
+static const RtArg k_args_111[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
@@ -2081,7 +2091,7 @@ static const RtArg k_args_110[] = {
     {72u, 2u, 13},   // hidden_grid_dims
 };
 
-static const RtArg k_args_111[] = {
+static const RtArg k_args_112[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -2095,29 +2105,13 @@ static const RtArg k_args_111[] = {
     {56u, 4u, 0},   // by_value/global
     {60u, 4u, 0},   // by_value/global
     {64u, 4u, 0},   // by_value/global
-};
-
-static const RtArg k_args_112[] = {
-    {0u, 8u, 0},   // by_value/global
-    {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {20u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_113[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
-    {16u, 8u, 0},   // by_value/global
-    {24u, 4u, 0},   // by_value/global
-    {28u, 4u, 0},   // by_value/global
-    {32u, 4u, 0},   // by_value/global
-    {36u, 4u, 0},   // by_value/global
-    {40u, 4u, 0},   // by_value/global
-    {44u, 4u, 0},   // by_value/global
-    {48u, 8u, 0},   // by_value/global
-    {56u, 4u, 0},   // by_value/global
-    {60u, 4u, 0},   // by_value/global
-    {64u, 4u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_114[] = {
@@ -2130,16 +2124,32 @@ static const RtArg k_args_114[] = {
     {36u, 4u, 0},   // by_value/global
     {40u, 4u, 0},   // by_value/global
     {44u, 4u, 0},   // by_value/global
+    {48u, 8u, 0},   // by_value/global
+    {56u, 4u, 0},   // by_value/global
+    {60u, 4u, 0},   // by_value/global
+    {64u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_115[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+    {32u, 4u, 0},   // by_value/global
+    {36u, 4u, 0},   // by_value/global
+    {40u, 4u, 0},   // by_value/global
+    {44u, 4u, 0},   // by_value/global
+};
+
+static const RtArg k_args_116[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
     {20u, 4u, 0},   // by_value/global
 };
 
-static const RtArg k_args_116[] = {
+static const RtArg k_args_117[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -2147,7 +2157,7 @@ static const RtArg k_args_116[] = {
     {28u, 4u, 0},   // by_value/global
 };
 
-static const RtArg k_args_117[] = {
+static const RtArg k_args_118[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
@@ -2155,7 +2165,7 @@ static const RtArg k_args_117[] = {
     {24u, 4u, 0},   // by_value/global
 };
 
-static const RtArg k_args_118[] = {
+static const RtArg k_args_119[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -2267,22 +2277,23 @@ static const RtKernel k_table[] = {
     {"iq4xs_dequant_k", "iq4xs_dequant_k", 4u, k_args_99, 24u, 0u, 0u},
     {"iq4xs_dot_k", "iq4xs_dot_k", 13u, k_args_100, 72u, 0u, 0u},
     {"layernorm_k", "layernorm_k", 8u, k_args_101, 48u, 1024u, 0u},
-    {"q2_0_dequant_k", "q2_0_dequant_k", 4u, k_args_102, 24u, 0u, 0u},
-    {"q2_0_dot_k", "q2_0_dot_k", 13u, k_args_103, 72u, 0u, 0u},
-    {"q4_0_dequant_k", "q4_0_dequant_k", 4u, k_args_104, 24u, 0u, 0u},
-    {"q4_0_dot_k", "q4_0_dot_k", 13u, k_args_105, 72u, 0u, 0u},
-    {"q4k_dequant", "q4k_dequant", 16u, k_args_106, 80u, 0u, 0u},
-    {"q4k_dot_k", "q4k_dot_k", 13u, k_args_107, 72u, 0u, 0u},
-    {"q5k_dequant", "q5k_dequant", 16u, k_args_108, 80u, 0u, 0u},
-    {"q5k_dot_k", "q5k_dot_k", 13u, k_args_109, 72u, 0u, 0u},
-    {"q6k_dequant", "q6k_dequant", 16u, k_args_110, 80u, 0u, 0u},
-    {"q6k_dot_k", "q6k_dot_k", 13u, k_args_111, 72u, 0u, 0u},
-    {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_112, 24u, 0u, 0u},
-    {"q8_0_dot_k", "q8_0_dot_k", 13u, k_args_113, 72u, 0u, 0u},
-    {"quant_rows_fast_k", "quant_rows_fast_k", 9u, k_args_114, 48u, 0u, 0u},
-    {"reduce_blocks_k", "reduce_blocks_k", 4u, k_args_115, 24u, 0u, 0u},
-    {"router_top10_k", "router_top10_k", 5u, k_args_116, 32u, 0u, 0u},
-    {"softmax_k", "softmax_k", 5u, k_args_117, 32u, 1024u, 0u},
-    {"topk_k", "topk_k", 6u, k_args_118, 40u, 0u, 0u},
+    {"moe_combine_k", "moe_combine_k", 7u, k_args_102, 40u, 0u, 0u},
+    {"q2_0_dequant_k", "q2_0_dequant_k", 4u, k_args_103, 24u, 0u, 0u},
+    {"q2_0_dot_k", "q2_0_dot_k", 13u, k_args_104, 72u, 0u, 0u},
+    {"q4_0_dequant_k", "q4_0_dequant_k", 4u, k_args_105, 24u, 0u, 0u},
+    {"q4_0_dot_k", "q4_0_dot_k", 13u, k_args_106, 72u, 0u, 0u},
+    {"q4k_dequant", "q4k_dequant", 16u, k_args_107, 80u, 0u, 0u},
+    {"q4k_dot_k", "q4k_dot_k", 13u, k_args_108, 72u, 0u, 0u},
+    {"q5k_dequant", "q5k_dequant", 16u, k_args_109, 80u, 0u, 0u},
+    {"q5k_dot_k", "q5k_dot_k", 13u, k_args_110, 72u, 0u, 0u},
+    {"q6k_dequant", "q6k_dequant", 16u, k_args_111, 80u, 0u, 0u},
+    {"q6k_dot_k", "q6k_dot_k", 13u, k_args_112, 72u, 0u, 0u},
+    {"q8_0_dequant_k", "q8_0_dequant_k", 4u, k_args_113, 24u, 0u, 0u},
+    {"q8_0_dot_k", "q8_0_dot_k", 13u, k_args_114, 72u, 0u, 0u},
+    {"quant_rows_fast_k", "quant_rows_fast_k", 9u, k_args_115, 48u, 0u, 0u},
+    {"reduce_blocks_k", "reduce_blocks_k", 4u, k_args_116, 24u, 0u, 0u},
+    {"router_top10_k", "router_top10_k", 5u, k_args_117, 32u, 0u, 0u},
+    {"softmax_k", "softmax_k", 5u, k_args_118, 32u, 1024u, 0u},
+    {"topk_k", "topk_k", 6u, k_args_119, 40u, 0u, 0u},
 };
-static const int k_table_n = 119;
+static const int k_table_n = 120;

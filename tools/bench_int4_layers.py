@@ -84,7 +84,7 @@ def main() -> int:
         rt.upload(ps, s_raw)
         rt.upload(px, x)
         rt.upload(pid, ids)
-        m1, m2 = div_magic(nbpr, nblocks), div_magic(lin.n, lin.n + 1)
+        m1, m2 = div_magic(nbpr, nblocks), div_magic(lin.n, lin.n)
         argv = [pw, px, pp, nblocks, 64, nbpr, m1, lin.n, m2, ps, pid,
                 nbpr * BLOCK_BYTES, lin.n, m2]
 

@@ -78,7 +78,7 @@ def main() -> int:
     # 魔法数（整数除法的乘数）只算一次：div_magic 会对整个 i 域穷举校验，
     # 放进计时循环里会把 CPU 时间算进去。
     m_nbpr = _magic(nbpr, nblocks)
-    m_rows = _magic(rows, rows + 1)
+    m_rows = _magic(rows, rows)
     argv = [pw, px, pp, nblocks, 64, nbpr, m_nbpr, rows, m_rows, ps, pid,
             nbpr * BLOCK_BYTES, rows, m_rows]
 

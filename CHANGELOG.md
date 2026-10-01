@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.1.0
+
+模型级支持与效率优化。
+
+### 新增
+
+- `python/k100lc_kernels/model.py`：模型级运行时
+  `Workspace` / `F32Linear` / `DotLinear` / `RT4Linear` / `RMSNorm` /
+  `SwiGLU` / `MLP` / `MoECombine` / `KVCache` / `Sampler`。
+  权重只上传一次，工作缓冲按 key 复用，一次 forward 只 sync 一次。
+- `python/k100lc_kernels/quant.py`：主机侧 INT4 group=128 打包 / 参考解码
+  （`pack_int4_group128` / `dequant_int4_group128`）。
+- 新内核 `moe_combine_k`：按 router 权重合并多个专家的输出，补齐 MoE
+  前向的最后一步（内核总数 120）。
+- `examples/python_model_layer.py`：合成权重端到端验证 + 计时，覆盖
+  f32 MLP、INT4 MLP、MoE 合并。
+- `tools/bench_model_paths.py`：真实形状线性层基准（f32 vs INT4）。
+- `docs/MODEL_RUNTIME.md`：模型级 API、权重加载、MoE 组装、效率实践。
+
+### 优化
+
+- `Runtime.launch` / `launch2d` / `launch_dyn` 快路径：缓存编码后的内核名、
+  复用 argv 缓冲，单次 launch 的 Python 侧开销从约 10 us 降到约 7 us。
+- `W4Runner.gemv_device` / `gemm_device` 支持 `x_dev` / `y_dev` / `c_dev` 与
+  `sync=False`，可以把 W4A8/W4A4 也串进「一次 sync」的流水线。
+- `DotLinear` 对 dense 层按「输出行 × 每行块数」绑定 partial，支持 M=1..4
+  批量，并修正 `div_magic` 在 1 行场景下的边界问题。
+- 实测 `17408×5120`：f32 0.701 ms/层、INT4 W4A16 0.240 ms/层（2.93×）；
+  400 层权重流 280.6 ms/token → 95.9 ms/token。
+
+### 验证
+
+- `bash tools/build_all.sh`：120 内核重建通过。
+- `python3 examples/python_model_layer.py`：f32 / INT4 MLP 与 NumPy 参考
+  相对误差约 3.6e-7，MoE 合并约 4.5e-8。
+
 ## 1.0.0
 
 首个单项目版本：把 gfx926（K100_LC）的可复用内核、常驻运行时、Python /

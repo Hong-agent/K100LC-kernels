@@ -250,11 +250,11 @@ def dense_params(nrows: int, nbpr: int, workgroup: int = 64) -> dict:
         "nbpr": nbpr,
         "magic_nbpr": div_magic(nbpr, nblocks),
         "rows_per_exp": nrows,
-        "magic_rpe": div_magic(nrows, nblocks // nbpr + 1),
+        "magic_rpe": div_magic(nrows, nrows),
         "ids": list(range(nrows)),
         "stride": nbpr * BLOCK_BYTES,
         "rows_per_w": nrows,
-        "magic_rpw": div_magic(nrows, nblocks // nbpr + 1),
+        "magic_rpw": div_magic(nrows, nrows),
     }
 
 
@@ -357,8 +357,8 @@ def _selftest_dot_case(rng, label: str, nrows: int, k: int,
         ids, stride_blocks = list(range(buf_rows)), nbpr
         p = dense_params(nrows, nbpr)
         p.update(ids=ids, stride=stride_blocks * BLOCK_BYTES,
-                 rows_per_exp=nrows, magic_rpe=div_magic(nrows, nrows + 1),
-                 rows_per_w=nrows, magic_rpw=div_magic(nrows, nrows + 1))
+                 rows_per_exp=nrows, magic_rpe=div_magic(nrows, nrows),
+                 rows_per_w=nrows, magic_rpw=div_magic(nrows, nrows))
     else:                                       # 专家：每组 rows_per_w 行
         ids = list(range(n_ids))
         stride_blocks = rows_per_w * nbpr
@@ -366,10 +366,10 @@ def _selftest_dot_case(rng, label: str, nrows: int, k: int,
             "nblocks": nrows * nbpr, "workgroup": 64, "nbpr": nbpr,
             "magic_nbpr": div_magic(nbpr, nrows * nbpr),
             "rows_per_exp": rows_per_exp,
-            "magic_rpe": div_magic(rows_per_exp, nrows + 1),
+            "magic_rpe": div_magic(rows_per_exp, nrows),
             "ids": ids, "stride": stride_blocks * BLOCK_BYTES,
             "rows_per_w": rows_per_w,
-            "magic_rpw": div_magic(rows_per_w, nrows + 1),
+            "magic_rpw": div_magic(rows_per_w, nrows),
         }
     ref = ref_dot(packed, scales, x, nrows, nbpr, ids=ids,
                   rows_per_exp=p["rows_per_exp"], rows_per_w=p["rows_per_w"])
