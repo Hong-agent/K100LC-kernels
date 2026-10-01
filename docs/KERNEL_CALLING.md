@@ -660,6 +660,14 @@ rt.launch("kv_append_k_k", grid, 64, pkv, pstate, px, ...)
 # ViT LayerNorm
 rt.launch("vit_ln_kernel", grid, 64, [py, px, pw, pb, rows, cols, eps])
 
+# 融合多头解码注意力（一次前向 2 个 launch，不管几个头）：
+#   Kt [n_heads, dh, max_len]（转置）、V [max_len, n_heads*dh]（行主序，每头占相连 dh 列）
+#   R = pad >> cshift 必须是 64 的倍数；cshift = log2(nsplit)
+rt.launch("flash_dec_part_k", n_heads * nsplit, 64,
+          [po, pm, pl, pq, pkt, pv, n_kv, dh, pad, max_len, cshift, inv, n_heads * dh])
+rt.launch("flash_dec_comb_k", n_heads, 64, [pout, po, pm, pl, dh, nsplit, inv])
+#   运行时封装见 `k100lc_kernels.model.FlashAttention`（含 K/V 缓存与 append）
+
 # RoPE（rotate-half）：y[j]=a*c-b*s、y[j+half]=a*s+b*c，a/b 是 x 的前后半。
 #   cos/sin 形状 [rows, half]（每个位置一套表），grid = rows，wg = 64
 rt.launch("rope_apply_k", rows, 64, [py, px, pcos, psin, rows, dim])

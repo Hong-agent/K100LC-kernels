@@ -25,8 +25,9 @@ sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, MLP, MoECombine,  # noqa: E402
-                            Attention, MoEExperts, RMSNorm, RoPE, Runtime,
-                            Workspace, dequant_int4_group128, pack_int4_group128)
+                            Attention, FlashAttention, MoEExperts, RMSNorm, RoPE,
+                            Runtime, Workspace, dequant_int4_group128,
+                            pack_int4_group128)
 from iq_dequant import dequant_iq4_nl, dequant_q4_0_fast  # noqa: E402
 
 FAILURES: list[str] = []
@@ -262,6 +263,32 @@ def run_rope(rt: Runtime, dim: int, rng) -> None:
     rope.ws.free()
 
 
+def run_flash_attention(rt: Runtime, rng) -> None:
+    """融合多头解码注意力（`FlashAttention`：2 个 launch 覆盖所有头）对账 + 计时。"""
+    for n_heads, dh, n_kv, max_len in ((8, 128, 1000, 2048), (4, 64, 300, 512),
+                                       (8, 128, 4096, 4096), (1, 128, 1, 256)):
+        dim = n_heads * dh
+        fa = FlashAttention(rt, n_heads, dh, max_len, tag=f"fmha{n_heads}_{dh}_{n_kv}")
+        k = rng.standard_normal((n_kv, dim)).astype(np.float32)
+        v = rng.standard_normal((n_kv, dim)).astype(np.float32)
+        q = rng.standard_normal(dim).astype(np.float32)
+        fa.append(k, v)
+        got = fa.forward(q)
+        ref = np.zeros(dim, np.float32)
+        for h in range(n_heads):
+            sh = (k[:n_kv, h*dh:(h+1)*dh] @ q[h*dh:(h+1)*dh]) / np.sqrt(dh)
+            pp = np.exp(sh - sh.max())
+            pp /= pp.sum()
+            ref[h*dh:(h+1)*dh] = pp @ v[:n_kv, h*dh:(h+1)*dh]
+        err = _rel(got, ref)
+        if err > 1e-5:
+            FAILURES.append(f"FlashAttention(heads={n_heads}, n_kv={n_kv})")
+        t = _bench(lambda: fa.forward(q), 10)
+        print(f"[fmha] heads={n_heads} dh={dh} n_kv={n_kv} max_rel={err:.2e} "
+              f"time={t * 1e3:.1f} us")
+        fa.ws.free()
+
+
 def run_attention(rt: Runtime, dim: int, max_len: int, rng) -> None:
     """解码注意力（`Attention`）与 NumPy 参考对账 + 计时。
 
@@ -304,6 +331,7 @@ def main() -> int:
     rt = Runtime()
     run_rope(rt, 128, rng)
     run_attention(rt, 128, 640, rng)
+    run_flash_attention(rt, rng)
     run_f32(rt, args.rows, args.dim, args.ffn, rng)
     run_int4(rt, args.rows, args.dim, args.ffn, rng)
     run_moe(rt, args.rows, args.dim, args.moe_exp, rng)

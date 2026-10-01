@@ -25,6 +25,7 @@ import gen_gemv_f32  # noqa: E402
 import gen_gemv_f32_warp  # noqa: E402
 import gen_gemv_f32_rows8  # noqa: E402
 import gen_softmax_split  # noqa: E402
+import gen_flash_decode  # noqa: E402
 import gen_gemv_i8  # noqa: E402
 import gen_gelu_mul  # noqa: E402
 import gen_q4_0_dequant  # noqa: E402
@@ -50,7 +51,7 @@ import gen_moe_route  # noqa: E402
 
 MODULES = [
     gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_f32_rows8, gen_softmax_split,
-    gen_gemv_i8,
+    gen_flash_decode, gen_gemv_i8,
     gen_iq4nl_dequant, gen_iq4nl_to_i8,
     gen_q2_0_dequant, gen_iq4xs_dequant, gen_iq3xxs_dequant,
     gen_iq2s_dequant, gen_iq3s_dequant, gen_gelu_mul,
@@ -92,7 +93,8 @@ def main() -> int:
             "vgpr_count": max(vgpr, 1),
             # LDS 归约用量：warp-per-row GEMV / softmax / layernorm 用 64 lane×4B
             # 的槽位（1024 是它们的实际申请量）；8 行/warp 的 GEMV 只要 256 B。
-            "group_segment": (256 if name in ("gemv_f32_rows8_k",
+            "group_segment": (16640 if name == "flash_dec_part_k" else
+                              256 if name in ("gemv_f32_rows8_k",
                                               "gemv_f32_rows8_split_k",
                                               "block_max_k",
                                               "block_exp_sum_k", "reduce_max1_k",

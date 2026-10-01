@@ -281,6 +281,27 @@ y_dev = rope.forward_device(x_dev, rows, pos, sync=False)   # 逐 token 免同�
 的交错 `(2j, 2j+1)`。内核 `rope_apply_k` 由本仓库编译器从
 `compiler/examples/rope_apply.kkl` 生成，与 NumPy **逐位相同**。
 
+### 5.0.1 多头解码注意力：`FlashAttention`
+
+```python
+fa = FlashAttention(rt, n_heads=8, head_dim=128, max_len=4096)   # 一个对象管所有头
+fa.append(k, v)          # k/v 都是 [rows, n_heads*head_dim]
+out = fa.forward(q)      # q [n_heads*head_dim] → [n_heads*head_dim]
+out_dev = fa.forward_device(q_dev, sync=False)
+```
+
+一次前向**只有 2 个 launch**（`flash_dec_part_k` + `flash_dec_comb_k`），不管
+几个头；缓存布局是 K 转置 `Kt [n_heads, dh, max_len]`、V 行主序
+`[max_len, n_heads*dh]`（所以追加 V 是一次 `copy_dev`）。
+
+实测（设备侧连续调用）：4~8 头比「逐头走 `Attention`」快 **2.7~4.6 倍**
+（8×128、n_kv=1：343 → 74 us）；**1~2 头反而慢**（分块并行度不够），那种情况
+继续用下面的单头 `Attention`。
+
+```python
+# 要求：R = pad >> log2(nsplit) 是 64 的倍数，且 R ≤ 4096（LDS 16 KB + 256）
+```
+
 ### 5.1 解码注意力：`Attention`
 
 `Attention` 是**解码（M=1）**注意力，用**已对账**的内核拼出来，不依赖包里

@@ -283,6 +283,27 @@ def g_attn(s: Sweep, rng) -> None:
                   0 if rel < 1e-5 else 1,
                   f"max_rel={rel:.2e}")
             attn.ws.free()
+    # 融合多头解码注意力（flash_dec_part_k + flash_dec_comb_k）：头数 × 上下文
+    from k100lc_kernels.model import FlashAttention
+    for n_heads, dh, n_kv, max_len in ((1, 128, 300, 512), (4, 64, 1000, 1024),
+                                       (8, 128, 4096, 4096), (2, 128, 1, 256)):
+        dim = n_heads * dh
+        rng2 = np.random.default_rng(n_heads * 100 + dh + n_kv)
+        k = rng2.standard_normal((n_kv, dim)).astype(np.float32)
+        v = rng2.standard_normal((n_kv, dim)).astype(np.float32)
+        q = rng2.standard_normal(dim).astype(np.float32)
+        fa = FlashAttention(s.rt, n_heads, dh, max_len, tag=f"sw{n_heads}_{dh}")
+        fa.append(k, v)
+        got = fa.forward(q)
+        ref = np.zeros(dim, np.float32)
+        for h in range(n_heads):
+            sh = (k[:n_kv, h*dh:(h+1)*dh] @ q[h*dh:(h+1)*dh]) / np.sqrt(dh)
+            pp = np.exp(sh - sh.max()); pp /= pp.sum()
+            ref[h*dh:(h+1)*dh] = pp @ v[:n_kv, h*dh:(h+1)*dh]
+        rel = float(np.abs(got - ref).max() / max(1e-9, float(np.abs(ref).max())))
+        check(s, f"FlashAttention heads={n_heads} dh={dh} n_kv={n_kv}",
+              0 if rel < 1e-5 else 1, f"max_rel={rel:.2e}")
+        fa.ws.free()
     # V → Vt 的分块转置（编译器 + DSL 共享内存生成的核）：rows 跨 64 边界、y0 非零
     for rows, dim, y0 in ((1, 128, 0), (1, 128, 5), (63, 128, 0), (64, 128, 9),
                           (65, 128, 0), (130, 256, 3), (256, 64, 0)):

@@ -2,7 +2,7 @@
 
 本文件由 `tools/gen_kernel_docs.py` 从 [`python/k100lc_kernels/catalog.json`](../python/k100lc_kernels/catalog.json) 自动生成，请勿手工修改。
 
-预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **133 个内核**。
+预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **135 个内核**。
 
 调用方法、grid 语义和完整示例先看 [`docs/KERNEL_CALLING.md`](KERNEL_CALLING.md)。本页只回答「某个 lookup 到底要传哪些参数」。
 
@@ -18,8 +18,8 @@
 | Transformer 常用算子 | 23 |
 | Attention / KV / 视觉塔 | 19 |
 | 序列模型 / 卷积 | 6 |
-| 其他 | 6 |
-| **合计** | **133** |
+| 其他 | 8 |
+| **合计** | **135** |
 
 ## 速查表
 
@@ -48,6 +48,8 @@
 | `fa_decode_rows_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 buf:56:8 buf:64:8 buf:72:8 val:80:8 val:88:4 val:92:4 val:96:4 val:100:4 val:104:4 val:108:4 val:112:4 val:116:4 val:120:4 val:124:4 val:128:8 val:136:8 val:144:4` | 148 | 648 | 0 |
 | `fa_int4` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 val:56:4 val:60:4 val:64:4 val:68:4 val:72:4 val:76:4` | 80 | 58880 | 116 |
 | `fill_k` | `buf:0:8 val:8:4 val:16:8` | 280 | 0 | 0 |
+| `flash_dec_comb_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 48 | 0 | 0 |
+| `flash_dec_part_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 val:48:4 val:52:4 val:56:4 val:60:4 val:64:4 val:68:4 val:72:4` | 80 | 16640 | 0 |
 | `gather_heads_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4 val:28:4 val:32:4 val:40:8` | 304 | 0 | 0 |
 | `gather_rows_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4` | 32 | 0 | 0 |
 | `gdn_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 val:56:4 val:60:4 val:64:4 val:68:4 val:72:4 val:76:4` | 336 | 0 | 528 |
@@ -3199,6 +3201,8 @@
 - `block_exp_sum_k`：`buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4`
 - `block_max_k`：`buf:0:8 buf:8:8 val:16:4 val:20:4`
 - `div_scalar_k`：`buf:0:8 buf:8:8 val:16:4`
+- `flash_dec_comb_k`：`buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4`
+- `flash_dec_part_k`：`buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 val:48:4 val:52:4 val:56:4 val:60:4 val:64:4 val:68:4 val:72:4`
 - `reduce_max1_k`：`buf:0:8 buf:8:8 val:16:4`
 - `reduce_sum1_k`：`buf:0:8 buf:8:8 val:16:4`
 - `vt_scatter_k`：`buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4 val:28:4 val:32:4 val:36:4`

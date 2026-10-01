@@ -1229,6 +1229,41 @@ def t_rope_apply(ctx: Ctx):
                  ref)
 
 
+@case("attn", "flash_dec_part_k")
+def t_flash_dec_part(ctx: Ctx):
+    """融合多头解码注意力的分块部分和（`flash_dec_part_k` + `flash_dec_comb_k`）。
+
+    `(po, pm, pl, q, kt, v, n_kv, dh, pad, max_len, cshift, inv, vstride)`；
+    `Kt [n_heads, dh, max_len]`（转置）、`V [max_len, n_heads*dh]`（行主序，
+    每个头占相连的 `dh` 列）、`Po [n_heads, nsplit, dh]`、`Pm/Pl [n_heads, nsplit]`。
+    grid = `n_heads * nsplit`；要求 `R = pad >> cshift` 是 64 的倍数。
+    """
+    n_heads, dh, n_kv, pad, cshift = 4, 64, 300, 512, 3
+    nsplit = 1 << cshift
+    max_len = pad
+    rng = np.random.default_rng(160)
+    q = rng.standard_normal((n_heads, dh)).astype(np.float32)
+    kt = rng.standard_normal((n_heads, dh, max_len)).astype(np.float32)
+    v = rng.standard_normal((max_len, n_heads * dh)).astype(np.float32)
+    inv = np.float32(1.0 / np.sqrt(dh))
+    po = ctx.out(n_heads * nsplit * dh)
+    pm = ctx.out(n_heads * nsplit)
+    pl = ctx.out(n_heads * nsplit)
+    ctx.launch("flash_dec_part_k", n_heads * nsplit, 64,
+               [po, pm, pl, ctx.buf(q), ctx.buf(kt), ctx.buf(v), n_kv, dh, pad,
+                max_len, cshift, float(inv), n_heads * dh])
+    py = ctx.out(n_heads * dh)
+    ctx.launch("flash_dec_comb_k", n_heads, 64,
+               [py, po, pm, pl, dh, nsplit, float(inv)])
+    got = ctx.get(py, n_heads * dh).reshape(n_heads, dh)
+    ref = np.zeros((n_heads, dh), np.float32)
+    for h in range(n_heads):
+        s = (kt[h][:, :n_kv].T @ q[h]).astype(np.float32)
+        p = np.exp((s - s.max()) * inv).astype(np.float32)
+        ref[h] = (p @ v[:n_kv, h * dh:(h + 1) * dh]) / p.sum()
+    return judge(np.abs(got - ref).max(), ref)
+
+
 @case("attn", "vt_scatter_k")
 def t_vt_scatter(ctx: Ctx):
     """V 行主序 → `Vt [dim, max_len]` 转置（**编译器 + DSL 共享内存**生成的核）。

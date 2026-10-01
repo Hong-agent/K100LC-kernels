@@ -41,7 +41,7 @@ __all__ = [
     "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
     "RMSNorm", "SwiGLU", "MLP", "MoECombine", "MoEExperts", "RoPE",
     "KVCache", "Sampler",
-    "Attention",
+    "Attention", "FlashAttention",
     "run_sequence", "gemv_f32", "ROWS8_MAX_K", "SPLIT_SOFTMAX_MIN_PAD",
     "SPLITK_VTP",
 ]
@@ -919,6 +919,138 @@ class Attention:
         q = np.ascontiguousarray(q, dtype=np.float32).reshape(-1)
         self.rt.upload(self.q, q)
         out = self.forward_device(self.q, n_kv, sync=True)
+        return self.rt.download(out, self.dim, np.float32)
+
+
+class FlashAttention:
+    """**多头**解码注意力：一次 forward = 2 个 launch（`flash_dec_part_k` +
+    `flash_dec_comb_k`），不管几个头。
+
+    和单头的 `Attention` 的区别不只是头数：
+
+    * K 缓存是**每个头转置**存放的 `Kt [n_heads, head_dim, max_len]`
+      （`vt_scatter_k` 一个 launch 就能把 `[rows, n_heads*head_dim]` 整个转过来），
+      V 是行主序 `[n_heads, max_len, head_dim]`（追加就是一次 `copy_dev`）。
+      这样算分数时 lane j 读 `kt[d][base+j]` 是连续的、算输出时 lane d 读
+      `v[base+j][d]` 也是连续的。
+    * softmax 在分块内两趟做完（max → exp+和），跨分块的合并由 combine 内核按
+      `exp(m_s - M)` 加权后一次除完；**不需要** `softmax_vec_k` 那种单 warp
+      扫整行，也不需要外部的 `scale_mul_k`/`fill_k`（mask 在内核里做）。
+
+    约束：`pad = ceil(n_kv/256)*256`、`nsplit` 取「整除 `pad/64` 的最大 2 的幂
+    （≤ 64）」，并且 `R = pad/nsplit` 要是 64 的倍数且 ≤ 4096（LDS 16 KB + 256）。
+    """
+
+    def __init__(self, rt: Runtime, n_heads: int, head_dim: int, max_len: int,
+                 ws: Workspace | None = None, tag: str = "fmha"):
+        for v, nm in ((n_heads, "n_heads"), (head_dim, "head_dim")):
+            if v <= 0:
+                raise ValueError(f"{nm} 必须为正")
+        if head_dim > 128:
+            raise ValueError("head_dim 目前最大支持 128（内核按 64 一档扫）")
+        self.rt = rt
+        self.n_heads, self.head_dim = int(n_heads), int(head_dim)
+        self.dim = self.n_heads * self.head_dim
+        self.max_len = int(max_len)
+        self.tag = tag
+        self._own_ws = ws is None
+        self.ws = ws or Workspace(rt)
+        self.kt = self.ws.buffer(tag + ".kt", self.dim * self.max_len * 4)
+        self.v = self.ws.buffer(tag + ".v", self.max_len * self.dim * 4)
+        self.po = self.ws.buffer(tag + ".po", self.n_heads * 64 * self.head_dim * 4)
+        self.pm = self.ws.buffer(tag + ".pm", self.n_heads * 64 * 4)
+        self.pl = self.ws.buffer(tag + ".pl", self.n_heads * 64 * 4)
+        self.out = self.ws.buffer(tag + ".out", self.dim * 4)
+        self.q = self.ws.buffer(tag + ".q", self.dim * 4)
+        self.length = 0
+
+    # ---------------- 追加 KV ----------------
+    def _copy_k(self, k_dev: int, off: int, rows: int) -> None:
+        """K：`[rows, n_heads*head_dim]` → 转置写进 `Kt [dim, max_len]`。
+
+        用 `vt_scatter_k`（编译器 + DSL 共享内存生成的分块转置），一个 launch
+        就把**所有头**都转过去：`dim/64` 是 2 的幂时列 tile 天然覆盖每个头。
+        """
+        if not self.rt.has("vt_scatter_k"):
+            raise RuntimeError("内核包里没有 vt_scatter_k（需要重跑 build_all.sh）")
+        cshift = (self.dim // 64).bit_length() - 1
+        ntile = cdiv(rows, 64) * (self.dim // 64)
+        self.rt.launch("vt_scatter_k", ntile, 64,
+                       [self.kt, int(k_dev), rows, self.dim, self.dim,
+                        self.max_len, off, cshift])
+
+    def append_device(self, k_dev: int, v_dev: int, rows: int) -> None:
+        """追加 `rows` 个 token：K 转置进 `Kt`，V 行主序直接拷。"""
+        rows = int(rows)
+        if self.length + rows > self.max_len:
+            raise ValueError(f"KV 溢出：{self.length}+{rows} > {self.max_len}")
+        off = self.length
+        self._copy_k(k_dev, off, rows)
+        self.rt.copy_dev(self.v + off * self.dim * 4, int(v_dev),
+                         rows * self.dim * 4)
+        self.length += rows
+
+    def append(self, k: np.ndarray, v: np.ndarray) -> None:
+        k = np.ascontiguousarray(k, dtype=np.float32).reshape(-1, self.dim)
+        v = np.ascontiguousarray(v, dtype=np.float32).reshape(-1, self.dim)
+        rows = k.shape[0]
+        if self.length + rows > self.max_len:
+            raise ValueError(f"KV 溢出：{self.length}+{rows} > {self.max_len}")
+        pk = self.ws.buffer(self.tag + ".krow", rows * self.dim * 4)
+        pv = self.ws.buffer(self.tag + ".vrow", rows * self.dim * 4)
+        self.rt.upload(pk, k.reshape(-1))
+        self.rt.upload(pv, v.reshape(-1))
+        self.append_device(pk, pv, rows)
+
+    def reset(self) -> None:
+        self.length = 0
+
+    # ---------------- 前向 ----------------
+    def plan(self, n_kv: int | None = None) -> tuple[int, int, int]:
+        """返回 `(pad, nsplit, R)`；参数不合法就直接报错（不静默算错）。"""
+        n_kv = self.length if n_kv is None else int(n_kv)
+        if n_kv <= 0:
+            raise ValueError("n_kv 必须为正")
+        pad = cdiv(n_kv, 256) * 256
+        p64 = pad // 64
+        nsplit = 1
+        while nsplit * 2 <= 64 and p64 % (nsplit * 2) == 0:
+            nsplit *= 2
+        R = pad // nsplit
+        if R % 64 or R > 4096:
+            raise ValueError(
+                f"pad={pad} 下 nsplit={nsplit} 不合适（R={R}，要求 64 的倍数且 "
+                f"≤ 4096）；换 max_len 或把上下文切小一点")
+        return pad, nsplit, R
+
+    def forward_device(self, q_dev: int, n_kv: int | None = None,
+                       sync: bool = False, out_dev: int | None = None) -> int:
+        """一次解码注意力（q 是**一个** token 的 `[n_heads*head_dim]`）。"""
+        pad, nsplit, _R = self.plan(n_kv)
+        n_kv = self.length if n_kv is None else int(n_kv)
+        cshift = nsplit.bit_length() - 1
+        inv = np.float32(1.0 / np.sqrt(self.head_dim))
+        out = int(out_dev) if out_dev is not None else self.out
+        self.rt.launch("flash_dec_part_k", self.n_heads * nsplit, 64,
+                       [self.po, self.pm, self.pl, int(q_dev), self.kt, self.v,
+                        n_kv, self.head_dim, pad, self.max_len, cshift,
+                        float(inv), self.dim])       # 最后一个是 V 的行距
+        self.rt.launch("flash_dec_comb_k", self.n_heads, 64,
+                       [out, self.po, self.pm, self.pl, self.head_dim,
+                        nsplit, float(inv)])
+        if sync:
+            self.rt.sync()
+        return out
+
+    def forward(self, q: np.ndarray, n_kv: int | None = None,
+                sync: bool = True):
+        q = np.ascontiguousarray(q, dtype=np.float32).reshape(-1)
+        if q.size != self.dim:
+            raise ValueError(f"q 的元素数应是 n_heads*head_dim={self.dim}")
+        self.rt.upload(self.q, q)
+        out = self.forward_device(self.q, n_kv=n_kv, sync=sync)
+        if not sync:
+            return out
         return self.rt.download(out, self.dim, np.float32)
 
 
