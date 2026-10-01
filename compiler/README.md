@@ -42,6 +42,15 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
   * `while` 的条件必须是 **uniform（标量）比较**；`while 1:` 也支持
     （无条件的无限循环，靠 `break` 退出）。varying 条件会明确报错——
     那需要 loop-carried 的 exec 掩码约定，还没定。
+  * **标量（uniform）变量是整波一份**：SGPR 指令不受 exec 掩码控制，所以
+    一个标量变量只在**它自己那个 varying 区**里做记账才是自洽的整波语义。
+    跑出这个区（或跑到嵌套的子区、别的区）去改它 → 直接报错（v1.8.2 之前
+    是静默算错：`c = 0` 在区外、`if x[i] < 0: c = c + 1` 在区内，会让条件
+    不成立的 lane 也一起变成 1）。要 **per-lane** 计数/累加就用 `f32`
+    变量（f32 局部变量天生是 VGPR）；要整波一致的记账，就把建和改都放在
+    同一个 varying 区里（`q4k/q5k/q6k_dequant` 就是这么写的）。
+  * `break` / `continue` 不能出现在 varying 区的 `if` 里：分支是标量指令，
+    会把**所有** lane 一起跳出/跳回（同样是 v1.8.2 起直接报错）。
 * 条件：比较、`and` / `or`（非短路——DSL 表达式无副作用，两侧都求值后把掩码
   在 vcc 里按位合并；uniform 与 varying 条件可以混用）
 * 内存：`buf[index]` load/store，下标可以是 varying 表达式

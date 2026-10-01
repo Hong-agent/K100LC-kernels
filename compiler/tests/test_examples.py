@@ -439,13 +439,18 @@ def check_while(out_dir: pathlib.Path) -> None:
 
     varying 条件会明确报错——那需要 loop-carried 的 exec 掩码约定，
     还没定，宁可报错也不给错结果。
+
+    v1.8.2 起，在 varying 区里新建的变量是 per-lane VGPR，所以 while 的
+    循环变量也必须建在 uniform 上下文里（否则条件就成了 varying）。下面
+    四个用例统一用 uniform 的 `if n > 0:` 包一层，专门盯 while 本身
+    （varying 区内的 while 计数器见 `check_uniform_region_assign`）。
     """
     cases = [
         ("uniform 计数",
          """
 def wk(x: ptr[f32], y: ptr[f32], n: u32):
     i = gid()
-    if i < n:
+    if n > 0:
         c = 0
         v = x[i]
         while c < 3:
@@ -458,7 +463,7 @@ def wk(x: ptr[f32], y: ptr[f32], n: u32):
          """
 def wk(x: ptr[f32], y: ptr[f32], n: u32):
     i = gid()
-    if i < n:
+    if n > 0:
         c = 0
         v = x[i]
         while c < 100:
@@ -473,7 +478,7 @@ def wk(x: ptr[f32], y: ptr[f32], n: u32):
          """
 def wk(x: ptr[f32], y: ptr[f32], n: u32):
     i = gid()
-    if i < n:
+    if n > 0:
         c = 0
         v = 0.0
         while c < 5:
@@ -488,7 +493,7 @@ def wk(x: ptr[f32], y: ptr[f32], n: u32):
          """
 def wk(x: ptr[f32], y: ptr[f32], n: u32):
     i = gid()
-    if i < n:
+    if n > 0:
         c = 0
         while 1:
             c = c + 1
@@ -521,6 +526,123 @@ def wk(x: ptr[f32], y: ptr[f32], n: u32):
     except Exception as exc:                       # noqa: BLE001
         assert "uniform" in str(exc), exc
     print("while（4 种写法）+ varying 条件报错 ok")
+
+
+def check_uniform_region_assign(out_dir: pathlib.Path) -> None:
+    """回归：跨 varying 区给「uniform（SGPR）变量」赋值这一类静默算错。
+
+    SGPR 指令整波执行一次、不受 exec 掩码控制，所以在 varying 区里给一个
+    区外建好的 scalar 变量赋值，**所有** lane 都会看到这次修改。实测
+    （v1.8.2 之前，同一个 wave 里 128 个元素错 32 个）：
+
+        c = 0
+        if i < n:
+            if x[i] < 0: c = c + 1
+            y[i] = f32(c)          # 期望 0/1，实际条件不成立的 lane 也是 1
+
+    现在的规则（标量变量只在**它自己那个区**里做整波记账才自洽）：
+      * per-lane 计数/累加 → 用 `f32` 变量（f32 局部变量天生是 VGPR）；
+      * 同一个 varying 区里建、同一个区里改的标量 → 允许（这是 q4k/q5k/q6k
+        dequant 系列的写法，整波一致的地址/系数记账，改完产物字节不变）；
+      * 跑到别的 varying 区（含区外）去改标量 → **直接报错**，不静默算错；
+      * `break`/`continue` 在 varying 区里同样报错（标量分支会让所有 lane
+        一起跳出/跳回）。
+    """
+    n = 64
+    grid = 128
+    # 关键：区内必须**同时**有满足/不满足内层条件的 lane，否则测试抓不到
+    # 「整波 +1」这个错（x[i] = i - 32 → i<32 为负、32≤i<n 为正）。
+    x = (np.arange(grid, dtype=np.float32) - 32.0)
+
+    # (1) per-lane 计数器：f32 变量天生是 VGPR，只有自己那条 lane 才 +1
+    src = """
+def wk(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    c = 0.0
+    if i < n:
+        if x[i] < 0.0:
+            c = c + 1.0
+        y[i] = c
+"""
+    h = compile_source(src, out_dir, "wk")[0]
+    o = run_one(h, "wk",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": n}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * grid}},
+                grid=grid, workgroup=64)
+    got = np.array(o["y"], np.float32)
+    idx = np.arange(grid)
+    ref = np.where((idx < n) & (x < 0.0), 1.0, 0.0).astype(np.float32)
+    assert ref.min() == 0.0 and ref.max() == 1.0, "测试数据退化：区内全是同一类 lane"
+    assert np.array_equal(got, ref), (
+        f"varying 区内的 per-lane 计数器错：got={got[:8].tolist()} "
+        f"ref={ref[:8].tolist()}")
+
+    # (1b) 同一个 varying 区里建/改的标量：允许，整波一致（dequant 系列写法）
+    same_region = """
+def wk1(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        c = 0
+        for k in range(0, 3):
+            c = c + 1
+        y[i] = f32(c)
+"""
+    h = compile_source(same_region, out_dir, "wk1")[0]
+    o = run_one(h, "wk1",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": n}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * grid}},
+                grid=grid, workgroup=64)
+    got = np.array(o["y"], np.float32)
+    ref = np.where(idx < n, 3.0, 0.0).astype(np.float32)
+    assert np.array_equal(got, ref), (
+        f"同区内的整波标量记账错：got={got[:8].tolist()} ref={ref[:8].tolist()}")
+
+    # (2) 跑到区外/别的区去改标量 → 必须报错（信息里带 "uniform"）
+    bad_src = """
+def bad(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    c = 0
+    if i < n:
+        c = c + 1
+        y[i] = f32(c)
+"""
+    try:
+        compile_source(bad_src, out_dir, "bad")
+        raise AssertionError("varying 区里给 uniform 变量赋值应当报错")
+    except Exception as exc:                       # noqa: BLE001
+        msg = str(exc)
+        assert "uniform" in msg and "c" in msg, msg
+
+    # (3) break / continue 在 varying 区里 → 报错（标量分支影响整波）
+    brk_src = """
+def bad2(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        c = 0
+        while 1:
+            c = c + 1
+            break
+"""
+    cont_src = """
+def bad3(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        while 1:
+            continue
+"""
+    for fn_name, src_bad, word in (("bad2", brk_src, "break"),
+                                   ("bad3", cont_src, "continue")):
+        try:
+            compile_source(src_bad, out_dir, fn_name)
+            raise AssertionError(f"varying 区里的 {word} 应当报错")
+        except Exception as exc:                   # noqa: BLE001
+            msg = str(exc)
+            assert word in msg and "varying" in msg, msg
+    print("varying 区 uniform 赋值 / break / continue 报错 + per-lane 计数 ok")
 
 
 def check_mixed_types(out_dir: pathlib.Path) -> None:
@@ -567,10 +689,12 @@ def check_mixed_types(out_dir: pathlib.Path) -> None:
         d = float(np.abs(got - ref).max())
         assert d < 1e-5, f"{title}: max_abs={d} got={got[:3].tolist()} ref={ref[:3].tolist()}"
     # 全 uniform 的 `while a and b`（之前会被当成 varying 拒掉）
+    # 注意循环计数器要建在 uniform 上下文里（v1.8.2 起 varying 区里的新变量
+    # 是 per-lane VGPR，while 条件就不再是 uniform 了），所以这里用 `n > 0`。
     src = """
 def mt(x: ptr[f32], y: ptr[f32], n: u32):
     i = gid()
-    if i < n:
+    if n > 0:
         a = 0
         b = 0
         while a < 3 and b < 5:
@@ -643,6 +767,7 @@ def main() -> int:
     check_int_cmp_and_divmod(out)
     check_math_builtins(out)
     check_while(out)
+    check_uniform_region_assign(out)
     check_mixed_types(out)
     check_transcendental_hazards(out)
     return 0

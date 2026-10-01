@@ -106,6 +106,14 @@ class CodeGen:
         self.max_v = 1
         self.max_s = 15
         self.loop_stack: list[tuple[str, str]] = []
+        # 当前嵌套在哪些「varying 条件的 if」里（存每个区的编号，最内层在末尾）。
+        # 用途一：`break`/`continue` 在区里是错的——标量分支会让**所有** lane
+        # 一起跳出/跳回，而不是只影响条件成立的那些 lane。
+        # 用途二：标量（SGPR）变量只在它**自己那个区**里才是整波一致的记账；
+        # 换个区赋值就说明要的是 per-lane 语义（见 `_assign_name`）。
+        self.varying_regions: list[int] = []
+        self.region_n = 0
+        self.var_region: dict[str, int | None] = {}   # 变量是在哪个 varying 区里建的
         self.zero_v = 1
         self.label_n = 0
         self._parse_params()
@@ -211,6 +219,14 @@ class CodeGen:
         for r in self.new_temps:
             self.free_tmp_v(r)
         self.new_temps.clear()
+
+    def _cur_region(self) -> int | None:
+        """当前最内层 varying 区的编号（不在任何区里就是 None）。"""
+        return self.varying_regions[-1] if self.varying_regions else None
+
+    def _region_of(self, name: str) -> int | None:
+        """变量是在哪个 varying 区里建的。"""
+        return self.var_region.get(name)
 
     def alloc_addr_pair(self) -> tuple[int, int]:
         # 所有 load/store 复用同一个地址对；表达式求值不会同时持有两个地址
@@ -943,8 +959,19 @@ class CodeGen:
         elif isinstance(node, ast.While):
             self._while(node)
         elif isinstance(node, ast.Break):
+            if self.varying_regions:
+                raise CompileError(
+                    "break 不能放在 varying 条件的 if 里：分支是标量指令、不受 "
+                    "exec 掩码控制，会把**所有** lane 一起跳出循环（实测会让本来"
+                    "不该退出的 lane 也退出）。请把退出条件并进循环条件，或把 "
+                    "break 挪到 uniform 条件下面。")
             self.emit(f"s_branch {self.loop_stack[-1][1]}")
         elif isinstance(node, ast.Continue):
+            if self.varying_regions:
+                raise CompileError(
+                    "continue 不能放在 varying 条件的 if 里：标量分支不受 exec "
+                    "掩码控制，会把**所有** lane 一起跳回循环头。请把条件并进"
+                    "循环条件，或把 continue 挪到 uniform 条件下面。")
             self.emit(f"s_branch {self.loop_stack[-1][0]}")
         elif isinstance(node, ast.Pass):
             return
@@ -952,6 +979,14 @@ class CodeGen:
             raise CompileError(f"不支持的语句 {type(node).__name__}")
 
     def _assign_name(self, name: str, val: Val, force_ty: str | None = None) -> None:
+        """给局部变量赋值。
+
+        标量（SGPR）变量是**整波一份**的：SGPR 指令不受 exec 掩码影响。所以
+        一个标量变量只有在「它自己那个 varying 区」里做记账才是自洽的整波
+        语义；一旦跑到**别的**区（或区外）去赋值，用户想要的几乎一定是
+        per-lane 语义，这时整波记账就是静默算错——直接报错，让用户改用 f32
+        局部变量（f32 天生是 per-lane 的 VGPR）。
+        """
         if force_ty == "f32":
             val = self._f32_operand(val)        # `v: f32 = 1` 要当 1.0
         ty = force_ty or val.ty
@@ -961,16 +996,36 @@ class CodeGen:
                 self.emit(f"v_mov_b32_e32 v{dst.reg}, v{self.as_vreg(val)}")
             elif dst.kind == "s":
                 if self.is_uniform(val):
+                    if self._region_of(name) != self._cur_region():
+                        # SGPR 指令是**整波执行一次**的，不受 exec 掩码影响。
+                        # 变量在 A 区建、却在另一个区（含区外）被赋值，说明
+                        # 想要的是 per-lane 语义——这时整波记账会静默算错
+                        # （实测 `c=0` 在区外、`if x[i]<0: c=c+1` 在区内 →
+                        # 条件不成立的 lane 也一起变成 1，128 个元素里错 32 个）。
+                        raise CompileError(
+                            f"{name} 是 uniform（标量）变量，不能在**别的** varying "
+                            f"区里赋值：SGPR 指令整波执行一次、不受 exec 掩码"
+                            f"影响，所有 lane 都会看到这次修改——要的是 per-lane "
+                            f"计数/累加时会**静默算错**。要做 per-lane 状态请用 "
+                            f"f32 变量（`{name} = 0.0` 那样，f32 局部变量天生是 "
+                            f"per-lane 的 VGPR）；要保留整波一致的标量记账，请把"
+                            f"它和赋值放在同一个 varying 区里（或者挪到 uniform "
+                            f"上下文）。")
                     self.emit(f"s_mov_b32 s{dst.reg}, s{self.as_sreg(val)}")
                 else:
                     # 不把 varying 收回 uniform
                     r = self._named_vreg(name)
                     self.emit(f"v_mov_b32_e32 v{r}, v{self.as_vreg(val)}")
                     self.env[name] = Val("v", r, ty)
+                    self.var_region[name] = self._cur_region()
             else:
                 raise CompileError("不能赋值给指针")
             self._release(val)
             return
+        # 新建变量：初值是 uniform 的整数/整波标量就建成 SGPR（区里建也一样，
+        # 这样 dequant 那种「区里建、区里改」的地址/系数记账照旧是整波语义、
+        # 产物不变）；f32 与 varying 初值才给 VGPR。_region_of 记下它是在哪个
+        # varying 区里建的，跨区赋值时上面那条报错会挡住静默算错。
         if self.is_uniform(val) and ty != "f32":
             r = self._alloc_var_s()
             self.emit(f"s_mov_b32 s{r}, s{self.as_sreg(val)}")
@@ -979,6 +1034,7 @@ class CodeGen:
             r = self._named_vreg(name)
             self.emit(f"v_mov_b32_e32 v{r}, v{self.as_vreg(val)}")
             self.env[name] = Val("v", r, ty)
+        self.var_region[name] = self._cur_region()
         self._release(val)
 
     def _if(self, node: ast.If) -> None:
@@ -987,6 +1043,8 @@ class CodeGen:
             save = self.save_s
             self.save_s += 2
             end = self.new_label("if_end")
+            self.region_n += 1
+            self.varying_regions.append(self.region_n)
             if not node.orelse:
                 self.emit(f"s_and_saveexec_b64 s[{save}:{save + 1}], vcc")
                 self.emit(f"s_cbranch_execz {end}")
@@ -994,6 +1052,7 @@ class CodeGen:
                     self.stmt(st)
                 self.emit(f"s_or_b64 exec, exec, s[{save}:{save + 1}]")
                 self.label(end)
+                self.varying_regions.pop()
                 self.save_s -= 2
                 return
             # varying if/else：把 exec 分别掩成 (old & cond) 与 (old & ~cond)，
@@ -1014,6 +1073,7 @@ class CodeGen:
                 self.stmt(st)
             self.emit(f"s_mov_b64 exec, s[{save}:{save + 1}]")
             self.label(end)
+            self.varying_regions.pop()
             self.save_s -= 2
             return
         end = self.new_label("if_end")
@@ -1069,6 +1129,9 @@ class CodeGen:
         varying 条件需要 loop-carried 的 exec 掩码（每一轮都可能退出不同的
         lane），那套约定还没定，所以直接报错而不是给错的结果。
         `while 1:` 支持（无条件的无限循环，靠 `break` 退出）。
+
+        循环变量要建在 uniform 上下文里：varying 区里建的标量是「整波记账」
+        语义（跨区赋值会直接报错），拿它当条件就不再是 uniform 比较了。
         """
         head = self.new_label("while_head")
         end = self.new_label("while_end")

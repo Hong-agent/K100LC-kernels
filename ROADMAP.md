@@ -71,9 +71,9 @@ GEMV / 量化解码 / 融合点积），全部通过。
 | D2 | spill | 待办 | 现在只有「同时存活的临时值」超过 v245 才报错，实际很难触到；真要做 spill 得先有栈帧约定 |
 | D3 | varying `if/else` | 已完成 | v1.6.2 用 exec 掩码实现（v1.6.3 修掉嵌套时 else 被跳过）；顺带修掉「f32 比较全都编不过」与 `^` 没接线 |
 | D4 | 新内建 | 进行中 | 已补 `min`/`max`（类型感知）、`floor`/`ceil`/`trunc`/`rint`/`fract`/`ubyte`；运算符补了 `^`、整数比较全表、2 的幂常量 `/` `%`；后续按需加 `frexp`/`mulhi`/`bfi` 等 |
-| D5 | 编译器自检 | 部分完成 | 已有 14 项（vadd/silu/axpy/loop/many_vars/long_expr/f32-比较/varying-ifelse/DSL 特性扫描/整数比较与除模/取整族内建/while/混合类型提升/超越函数 hazard）+ 动态启动；仍缺「生成 vs 参考」的批量随机回归集 |
-| D6 | 后端正确性扫描 | 已完成 | 「拿文档当规格逐项对账」这个方法连查出**六类**问题：f32 比较全挂、整数比较 8 个运算符挂、`^` 没接线、嵌套 varying if/else 算错、**整数常量在 f32 上下文被当位模式**（`x[i]+1` 直接丢）、**超越函数漏 `s_nop`**（部分 lane 才错）。已扫完并固化：一元负号、`& \| ^ << >>`、增强赋值（含 `%=` 等）、两种 `range`、嵌套 for + break 只跳内层、uniform/varying if-else、多内核单文件、`u8/u16` 指针、`load16`/`s8`/`f16_to_f32`、f32/int 比较全表、2 的幂除模、取整族内建、`and`/`or`、混合类型提升、超越函数 hazard；不支持的特性（`while`、`return`、指针赋值、链式比较、一般除数）都给出明确报错 |
-| D7 | 循环语句 | 部分完成 | v1.7.4 补上 `while`（条件必须 uniform；`while 1` + break 也支持）；varying 条件的 `while` 还需要 loop-carried 掩码约定，仍待办 |
+| D5 | 编译器自检 | 部分完成 | 已有 15 项（vadd/silu/axpy/loop/many_vars/long_expr/f32-比较/varying-ifelse/DSL 特性扫描/整数比较与除模/取整族内建/while/跨 varying 区 uniform 赋值/混合类型提升/超越函数 hazard）+ 动态启动；仍缺「生成 vs 参考」的批量随机回归集 |
+| D6 | 后端正确性扫描 | 已完成 | 「拿文档当规格逐项对账」这个方法连查出**七类**问题：f32 比较全挂、整数比较 8 个运算符挂、`^` 没接线、嵌套 varying if/else 算错、**整数常量在 f32 上下文被当位模式**（`x[i]+1` 直接丢）、**超越函数漏 `s_nop`**（部分 lane 才错）、**跨 varying 区改 uniform（SGPR）变量**（整波执行，`c=0` 在区外 + `if x[i]<0: c=c+1` 在区内 → 条件不成立的 lane 也变 1，128 个元素错 32 个）。已扫完并固化：一元负号、`& \| ^ << >>`、增强赋值（含 `%=` 等）、两种 `range`、嵌套 for + break 只跳内层、uniform/varying if-else、多内核单文件、`u8/u16` 指针、`load16`/`s8`/`f16_to_f32`、f32/int 比较全表、2 的幂除模、取整族内建、`and`/`or`、跨区标量赋值、varying 区里的 `break`/`continue`、混合类型提升、超越函数 hazard；不支持的特性（varying 条件的 `while`、`return`、指针赋值、链式比较、一般除数）都给出明确报错 |
+| D7 | 循环语句 | 部分完成 | v1.7.4 补上 `while`（条件必须 uniform；`while 1` + break 也支持）；varying 条件的 `while` 还需要 loop-carried 掩码约定，仍待办。v1.8.2 起 `while` 的循环变量必须建在 uniform 上下文里——varying 区里建的标量是「整波记账」语义（跨区改直接报错），拿它当循环条件就不再是 uniform |
 
 ### E. 工程质量
 
@@ -90,3 +90,8 @@ GEMV / 量化解码 / 融合点积），全部通过。
   容易被误用，已在自检里各钉一个用例。
 * `gdn_k` / `gdn_k2<32>` / `fa_int4` / `vit_attn_kernel` 仍是「文档里有、真机上大概率
   fault」的状态，未纳入自检（见 A1）。
+* `kernels/asm/k_new/` 里由 `compiler/tools/export_kernel.py` 覆盖生成的
+  `.s`（`q4k/q5k/q6k_dequant`）是**当时编译器版本**的快照：用当前编译器重新
+  导出会得到等价但寄存器分配不同的代码（v1.8.2 验证过新旧编译器输出逐字节
+  一致，差异只来自历史版本的寄存器分配/比较指令形式）。要更新快照得重新
+  导出并重跑 `tools/check_all.sh`。
