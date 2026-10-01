@@ -315,7 +315,7 @@ for pos, tok in enumerate(tokens):
 RMSNorm → gate/up → SwiGLU → W_down → 残差`，**全程设备侧串联**，逐 token 只
 `sync` 一次。权重按「拼块」摆（QKV 合一、gate/up 合一），RoPE 一次处理所有头。
 
-实测（dim=512、8 头 × 64、ffn=1024）：**0.214~0.220 ms/token**（设备侧连续 30 个 token、
+实测（dim=512、8 头 × 64、ffn=1024）：**0.197~0.207 ms/token**（设备侧连续 30 个 token、
 一次 sync），逐 token 与 NumPy 参考对账 **1.9e-07**。这条路线上一个 token 约
 **10 个内核**（残差并进 GEMV、SwiGLU 并进 down 投影），而相邻内核之间是依赖关系——每条
 dispatch 的 GPU 侧开销实测约 7 us，所以这 0.23 ms 里大头仍是「内核数」而不是

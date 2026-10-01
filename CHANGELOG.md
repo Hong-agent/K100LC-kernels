@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.9.4
+
+**融合注意力只扫「真实存在的行」**：解码早期 `n_kv < R` 时，原来每个分块都要
+把 `R` 行扫两遍（其中绝大多数是 mask 掉的），现在按
+`R_eff = min(R, n_kv - base)` 收口。一层 decoder 到 **0.197~0.207 ms/token**。
+
+### 做法
+
+`flash_dec_part_k` 里三个相位（分数、max/exp、加权求和）原来都用固定的
+`R = pad >> cshift`：
+
+```
+R_eff  = min(R, n_kv - base)          # base < n_kv 已由「整段 mask 提前退出」保证
+行块数 = ceil(R_eff / 64)
+相位 1/2 按「行块数」循环（最后一块里的 mask 行照旧写 -1e30 → p = 0）
+相位 3 (Σ p·v) 只扫 j ∈ [0, R_eff)
+```
+
+三个相位用同一套界，所以不会被读到的 LDS 槽不会被写、会被写的槽都会被读到。
+
+### 实测
+
+| `flash_dec_part_k`（8 头 × dh64，nsplit=4） | 改前 | 改后 |
+|---|---:|---:|
+| n_kv=1 | 30.4 us | **24.8 us** |
+| n_kv=30 | 30.4 us | **24.1 us** |
+| n_kv=64（= R） | 30.3 us | 30.3 us（没有可省的） |
+| n_kv=256 | 30.2 us | 30.2 us |
+
+| 一层 decoder | 改前 | 改后 |
+|---|---:|---:|
+| 设备侧 30 token（一次 sync） | 0.214~0.220 ms/token | **0.197~0.207 ms/token** |
+
+### 验证
+
+* `tools/gen_flash_decode.py` 自检 8 组形状（含 `n_kv < pad` 的掩码与
+  `n_kv=8000/pad=8192` 的尾块）全部一致，最大相对误差 3.2e-06；
+* `tools/selftest_all.py` 77 用例全过；一层逐 token 对账 **1.76e-07**；
+* `bash tools/check_all.sh` 全绿。
+
 ## 1.9.3
 
 **编译器不再给每条 store 加 `s_waitcnt vmcnt(0)`** —— 这是「循环里写 64 次」

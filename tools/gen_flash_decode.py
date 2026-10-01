@@ -153,9 +153,19 @@ def gen_part_asm() -> str:
         "s_mul_i32 s45, s44, s34",                  # base
         "s_cmp_lt_u32 s45, s28",                    # base < n_kv ？
         "s_cbranch_scc0 L_masked",
+        # 本段真正要扫的行数：`min(R, n_kv - base)`（base < n_kv 已由上面保证）。
+        # 解码早期 n_kv < R，原来每段都要把 R 行扫两遍（63/64 是 mask 掉的），
+        # 实测 n_kv=1 时 flash_dec_part_k 要 30 us，几乎全是白扫。
+        "s_sub_u32 s46, s28, s45",                  # n_kv - base
+        "s_cmp_lt_u32 s46, s34",
+        "s_cbranch_scc1 L_reff_ok",
+        "s_mov_b32 s46, s34",                       # 超过 R 就按 R 算
+        "L_reff_ok:",
+        "s_add_u32 s47, s46, 63",                   # 行块数 = ceil(R_eff / 64)
+        "s_lshr_b32 s47, s47, 6",
         # ---------------- 第一趟：分数 ----------------
         "s_mov_b32 s36, 0",                         # c
-        "L_c1:", "s_cmp_lt_u32 s36, s38",
+        "L_c1:", "s_cmp_lt_u32 s36, s47",
         "s_cbranch_scc0 L_c1_done",
         "v_mov_b32_e32 v20, 0",                     # acc
         "s_mov_b32 s37, 0",                         # d
@@ -281,7 +291,7 @@ def gen_part_asm() -> str:
         # ---------------- 第二趟：max ----------------
         "v_mov_b32_e32 v20, 0xff800000",
         "s_mov_b32 s36, 0",
-        "L_c2:", "s_cmp_lt_u32 s36, s38",
+        "L_c2:", "s_cmp_lt_u32 s36, s47",
         "s_cbranch_scc0 L_c2_done",
         "v_mov_b32_e32 v32, s36",
         "v_lshlrev_b32_e32 v32, 6, v32",
@@ -316,7 +326,7 @@ def gen_part_asm() -> str:
         "v_mov_b32_e32 v22, 0x3fb8aa3b",            # log2(e)
         "v_mov_b32_e32 v23, s33",                   # inv
         "s_mov_b32 s36, 0",
-        "L_c3:", "s_cmp_lt_u32 s36, s38",
+        "L_c3:", "s_cmp_lt_u32 s36, s47",
         "s_cbranch_scc0 L_c3_done",
         "v_mov_b32_e32 v32, s36",
         "v_lshlrev_b32_e32 v32, 6, v32",
@@ -379,7 +389,7 @@ def gen_part_asm() -> str:
         # 同样一次发 4 个 j（4 条 LDS 读 p + 4 条 global 读 v），只等一次
         "L_j4:",
         "s_add_i32 s41, s37, 4",
-        "s_cmp_lt_u32 s41, s34",
+        "s_cmp_lt_u32 s41, s46",
         "s_cbranch_scc0 L_j",
         "v_mov_b32_e32 v42, s37",
         "v_lshlrev_b32_e32 v24, 2, v42",
@@ -443,7 +453,7 @@ def gen_part_asm() -> str:
         "v_fma_f32 v23, v47, v57, v23",
         "s_add_i32 s37, s37, 4",
         "s_branch L_j4",
-        "L_j:", "s_cmp_lt_u32 s37, s34",
+        "L_j:", "s_cmp_lt_u32 s37, s46",
         "s_cbranch_scc0 L_j_done",
         "v_mov_b32_e32 v42, s37",
         "v_lshlrev_b32_e32 v24, 2, v42",
