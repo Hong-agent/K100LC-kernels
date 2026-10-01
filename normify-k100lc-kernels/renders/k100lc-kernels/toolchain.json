@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.toolchain",
+  "updated_at": "2026-10-01T15:08:33.205Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "按使用场景分组：谁来构建、谁生成目录文档、谁上卡探针、谁处理权重、谁做基准。",
+    "en": "Grouped by use case: what builds, what generates catalogs and docs, what probes the device, what handles weights, and what benchmarks."
+  },
+  "order": [
+    "k100lc-kernels.toolchain.build",
+    "k100lc-kernels.toolchain.catalog",
+    "k100lc-kernels.toolchain.hsa-probe",
+    "k100lc-kernels.toolchain.weights",
+    "k100lc-kernels.toolchain.bench"
+  ],
+  "groups": [
+    {
+      "id": "build",
+      "title": {
+        "zh": "构建",
+        "en": "Build"
+      },
+      "children": [
+        "k100lc-kernels.toolchain.build",
+        "k100lc-kernels.toolchain.catalog"
+      ]
+    },
+    {
+      "id": "probe",
+      "title": {
+        "zh": "上卡探针",
+        "en": "Device Probes"
+      },
+      "children": [
+        "k100lc-kernels.toolchain.hsa-probe"
+      ]
+    },
+    {
+      "id": "weights",
+      "title": {
+        "zh": "权重与参考",
+        "en": "Weights & Reference"
+      },
+      "children": [
+        "k100lc-kernels.toolchain.weights"
+      ]
+    },
+    {
+      "id": "bench",
+      "title": {
+        "zh": "基准",
+        "en": "Benchmarks"
+      },
+      "children": [
+        "k100lc-kernels.toolchain.bench"
+      ]
+    }
+  ]
+}

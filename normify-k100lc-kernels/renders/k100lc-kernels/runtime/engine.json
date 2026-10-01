@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.runtime.engine",
+  "updated_at": "2026-10-01T15:08:29.081Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "引擎四块：头文件声明 ABI，初始化加载 HSACO，内存接口管设备缓冲，启动接口填 kernarg 并投递。",
+    "en": "The engine in four parts: the header declares the ABI, lifecycle loads the HSACO, the memory API manages device buffers, and the launch API fills kernarg and dispatches."
+  },
+  "order": [
+    "k100lc-kernels.runtime.engine.abi",
+    "k100lc-kernels.runtime.engine.lifecycle",
+    "k100lc-kernels.runtime.engine.memory",
+    "k100lc-kernels.runtime.engine.launch"
+  ]
+}

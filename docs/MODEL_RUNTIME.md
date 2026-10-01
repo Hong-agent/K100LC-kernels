@@ -260,9 +260,45 @@ cache.append_device(k_dev, v_dev, rows, sync=False)   # k_dev/v_dev 是 [rows,di
 `kv_append_v_k` / `fa_decode_k` 系列，参数见
 [`KERNELS.md`](KERNELS.md) 与 [`KERNEL_CALLING.md`](KERNEL_CALLING.md)。
 
-> 局限：包里目前没有把完整 attention 层（QKV 打包 + RoPE + KV 追加 +
-> FlashAttention + 输出投影）封装成一个 Python attention 类，因为各模型的
-> QKV 布局与 head 配置不同；这些内核仍然可以逐个调用。
+### 5.1 解码注意力：`Attention`
+
+`Attention` 是**解码（M=1）**注意力，用**已对账**的内核拼出来，不依赖包里
+语义未验证的 `fa_decode_*`：
+
+```python
+from k100lc_kernels import Attention
+
+attn = Attention(rt, dim=128, max_len=4096, tag="attn0")   # dim 与 max_len 都是 64 的倍数
+attn.append(k, v)              # k/v 是 [rows, dim]（V 会转置写进缓存的转置布局）
+out = attn.forward(q)          # q [dim] → [dim]
+# 逐 token 时用设备侧接口，避免每层一次 sync：
+out_dev = attn.forward_device(q_dev, sync=False)
+```
+
+内部就两条 GEMV（`gemv_f32_warp_k`）加一次 softmax：
+
+| 步骤 | 实现 |
+|---|---|
+| `scores = K·q` | `scores[n] = Σ_d K[n,d]·q[d]`，**K 当权重矩阵** |
+| 尾部掩码 | `fill_k` 把 padding 段填 -1e30 |
+| 缩放 / softmax | `scale_mul_k`（1/√dim）+ `softmax_k` |
+| `out = P·V` | `out[d] = Σ_j Vt[d,j]·P[j]`，**Vt 当权重矩阵** |
+
+实测（`dim=128`，设备侧连续调用）：
+
+| `n_kv` | 512 | 2048 | 8192 | 16384 | 32768 |
+|---:|---:|---:|---:|---:|---:|
+| us | 64 | 129 | 342 | 565 | 1016 |
+| 等效 KV 带宽 | 8 GB/s | 16 | 25 | 30 | 33 |
+
+**这个实现是「正确优先」的**：`gemv_f32_warp_k` 每个 warp 一行，解码时只有
+1 个 query，所以 `K·q` 有 n_kv 个 warp 够用，但 **`softmax_k` 是「一 warp
+一行」**——16K 上下文时只有 1 个 warp 扫 16384 列，单它就 291 us；`P·V`
+只有 dim=128 个 warp，131 us。要快得按 KV 分块（online softmax）重做这一层，
+见 [`ROADMAP.md`](../ROADMAP.md) B3。
+
+> 包里另有 `attn_pv_part`（编译器生成的 P·V 分块核，支持自定义行距）与
+> 未验证语义的 `fa_decode_*` 系列，供需要的人自行组合。
 
 ## 6. 采样
 

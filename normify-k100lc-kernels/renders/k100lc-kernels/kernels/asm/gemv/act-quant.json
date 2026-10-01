@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.gemv.act-quant",
+  "updated_at": "2026-10-01T15:08:18.848Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "两种激活量化：int4（配 W4A4）与 int8（配 W4A8）。",
+    "en": "Two activation quantizers: int4 for W4A4 and int8 for W4A8."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.gemv.act-quant.act4",
+    "k100lc-kernels.kernels.asm.gemv.act-quant.act"
+  ]
+}

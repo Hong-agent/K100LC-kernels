@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.gguf",
+  "updated_at": "2026-10-01T15:08:27.402Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "每个脚本对应一种 GGUF 编码，从最简单的 Q2_0/Q4_0/Q8_0 读到 IQ 系列与 IQ4_NL 的两种下游用法。",
+    "en": "One script per GGUF codec, from the simplest Q2_0/Q4_0/Q8_0 to the IQ family and the two downstream uses of IQ4_NL."
+  },
+  "order": [
+    "k100lc-kernels.generators.gguf.q2-0",
+    "k100lc-kernels.generators.gguf.q4-0",
+    "k100lc-kernels.generators.gguf.q8-0",
+    "k100lc-kernels.generators.gguf.iq4nl-dequant",
+    "k100lc-kernels.generators.gguf.iq4nl-gemv",
+    "k100lc-kernels.generators.gguf.iq4nl-to-i8",
+    "k100lc-kernels.generators.gguf.iq4xs",
+    "k100lc-kernels.generators.gguf.iq2s",
+    "k100lc-kernels.generators.gguf.iq3s",
+    "k100lc-kernels.generators.gguf.iq3xxs"
+  ]
+}

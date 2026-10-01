@@ -44,7 +44,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 |---|---|---|---|
 | B1 | 全内核性能基线 | 部分完成 | `tools/bench_decode.py` 已覆盖解码全通路 + **`--layers N` 端到端权重流**（400 层：W4A8 33.1 ms/token、W4A4 29.3 ms/token）；还缺 attention / norm 等族的吞吐基线 |
 | B2 | 预填充 INT4 GEMM | 待办（需改内核） | `N=17408 K=5120` 实测：**M=128 20.2、M=256 30.7、M=512、38.1、M=1024 41.8 TMAC/s**（峰值 78）。大 M 稳定 ~54%，小 M 掉到 26%。原因：grid 只按 `(M/128)×(N/64)` 切，M=128 时**只有 272 个 workgroup**（120 CU 才 2.27 个/CU），延迟掩盖不住。**已否掉一个错误方案**：按 K 对半拆成两次 GEMM 并不能提高并行度（grid 与 K 无关），必须上 **split-K 内核**（部分和 + reduce）或把 BM 从 128 改小——两者都要改那个 500+ 行的手写 GEMM |
-| B3 | 解码注意力（长上下文） | 待办 | `fa_decode_k` / `fa_decode_rows_k` 的 KV 访存与 GQA 复用 |
+| B3 | 解码注意力（长上下文） | 待办（已量化） | v1.7.6 先落地了一个**正确优先**的 `Attention`（两条 `gemv_f32_warp_k` + `softmax_k`，与 NumPy 对账 ~3e-7）。`dim=128` 实测：n_kv=512/2048/8192/16384/32768 → 64/129/342/565/1016 us。**瓶颈已定位**（n_kv=16384 拆解）：`softmax_k` **一 warp 一行、只有 1 个 warp 扫 16384 列 → 291 us**；`Vt·P` 只有 dim=128 个 warp → 131 us；`K·q` 有 16384 个 warp → 106 us（够用）。要快必须按 KV 分块做 **online softmax**（块内 max/sumexp + combine），或攻下 `fa_decode_k`/`fa_decode_comb_k` 的语义 |
 | B4 | 融合算子 | 待办 | RMSNorm+量化、rope+KV 写入、split_qkv+norm（后者已有 `k_gdn_split_norm_k`）等 |
 | B5 | MoE 专家并行度 | 待办 | 分桶路径已有 2.71×；继续做专家内并行 / 权重常驻 |
 | B6 | W4 GEMV 的 threads 约束 | 已完成 | 内核把「4 warp/组、1 行/warp」写死，非 256 会静默算错；`W4Runner` 现在直接拒绝 |

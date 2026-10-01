@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.norm",
+  "updated_at": "2026-10-01T15:08:21.977Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "RMSNorm（含门控变体）与 L2 归一化，全部 warp-per-row + LDS 归约。",
+    "en": "RMSNorm (with the gated variant) and L2 normalization, all warp-per-row with LDS reduction."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.norm.rmsnorm",
+    "k100lc-kernels.kernels.asm.new.norm.rmsnorm-gated",
+    "k100lc-kernels.kernels.asm.new.norm.l2norm"
+  ]
+}

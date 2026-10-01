@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.gemv.qdot.selftest",
+  "updated_at": "2026-10-01T15:08:26.742Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "先用参考实现与块加载准备输入，再跑逐编码自检。",
+    "en": "Prepare inputs with the reference implementation and block loaders, then run the per-codec self-tests."
+  },
+  "order": [
+    "k100lc-kernels.generators.gemv.qdot.selftest.reference",
+    "k100lc-kernels.generators.gemv.qdot.selftest.runners"
+  ]
+}

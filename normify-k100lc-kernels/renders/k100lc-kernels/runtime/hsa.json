@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.runtime.hsa",
+  "updated_at": "2026-10-01T15:08:28.749Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "初始化顺序：ABI 类型 → 设备/内存池发现 → 加载 HSACO 并建内核表 → 建队列 → 拷贝暂存 → 初始化与查找 → 投递内核；HIP 兼容层复用它。",
+    "en": "Initialization order: ABI types, agent/pool discovery, HSACO load and kernel table, queue creation, staging copies, init and lookup, then dispatch; the HIP layer reuses all of it."
+  },
+  "order": [
+    "k100lc-kernels.runtime.hsa.types",
+    "k100lc-kernels.runtime.hsa.bootstrap",
+    "k100lc-kernels.runtime.hsa.hsaco-load",
+    "k100lc-kernels.runtime.hsa.queue",
+    "k100lc-kernels.runtime.hsa.staging",
+    "k100lc-kernels.runtime.hsa.init",
+    "k100lc-kernels.runtime.hsa.dispatch",
+    "k100lc-kernels.runtime.hsa.hip-shim"
+  ]
+}

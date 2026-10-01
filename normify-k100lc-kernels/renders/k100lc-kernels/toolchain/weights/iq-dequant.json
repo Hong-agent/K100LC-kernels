@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.toolchain.weights.iq-dequant",
+  "updated_at": "2026-10-01T15:08:34.902Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "按依赖顺序：公共部件 → 旧编码 → K 系列 → 向量化快路 → IQ 系列 → 统一分发。",
+    "en": "In dependency order: shared helpers, legacy codecs, K-quants, vectorized fast paths, IQ codecs, then the unified dispatch."
+  },
+  "order": [
+    "k100lc-kernels.toolchain.weights.iq-dequant.tables",
+    "k100lc-kernels.toolchain.weights.iq-dequant.legacy-codecs",
+    "k100lc-kernels.toolchain.weights.iq-dequant.k-quants",
+    "k100lc-kernels.toolchain.weights.iq-dequant.fast-paths",
+    "k100lc-kernels.toolchain.weights.iq-dequant.iq-codecs-ref",
+    "k100lc-kernels.toolchain.weights.iq-dequant.dispatch"
+  ]
+}

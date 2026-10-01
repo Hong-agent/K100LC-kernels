@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.gemv.qdot.k-codecs",
+  "updated_at": "2026-10-01T15:08:26.412Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "K/Q 家族：先看三个公共发射器（地址/半字节/子块尺度），再看各编码的解码点积。",
+    "en": "The K/Q family: read the three shared emitters (address, nibble, sub-block scale) first, then each codec’s decode-and-dot."
+  },
+  "order": [
+    "k100lc-kernels.generators.gemv.qdot.k-codecs.emit-helpers",
+    "k100lc-kernels.generators.gemv.qdot.k-codecs.q2-0",
+    "k100lc-kernels.generators.gemv.qdot.k-codecs.q4-0",
+    "k100lc-kernels.generators.gemv.qdot.k-codecs.q8-0",
+    "k100lc-kernels.generators.gemv.qdot.k-codecs.q4k",
+    "k100lc-kernels.generators.gemv.qdot.k-codecs.q5k",
+    "k100lc-kernels.generators.gemv.qdot.k-codecs.q6k"
+  ]
+}

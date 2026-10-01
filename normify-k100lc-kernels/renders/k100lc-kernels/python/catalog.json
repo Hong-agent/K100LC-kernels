@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.python.catalog",
+  "updated_at": "2026-10-01T15:08:29.802Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "catalog.json 是数据，catalog.py 是访问器。",
+    "en": "catalog.json holds the data; catalog.py provides the accessors."
+  },
+  "order": [
+    "k100lc-kernels.python.catalog.data",
+    "k100lc-kernels.python.catalog.accessor"
+  ]
+}

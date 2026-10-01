@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.gemv.qdot.iq-codecs",
+  "updated_at": "2026-10-01T15:08:26.085Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "IQ 家族按块布局复杂度排列：IQ4_NL（纯码本）→ IQ2_S/IQ3_S（网格+符号）→ IQ4_XS（6bit 尺度）→ IQ3_XXS（u32 尺度数组）。",
+    "en": "The IQ family ordered by block-layout complexity: IQ4_NL (pure codebook), IQ2_S/IQ3_S (grid + signs), IQ4_XS (6-bit scales), IQ3_XXS (u32 scale array)."
+  },
+  "order": [
+    "k100lc-kernels.generators.gemv.qdot.iq-codecs.helpers",
+    "k100lc-kernels.generators.gemv.qdot.iq-codecs.iq4nl",
+    "k100lc-kernels.generators.gemv.qdot.iq-codecs.iq2s",
+    "k100lc-kernels.generators.gemv.qdot.iq-codecs.iq3s",
+    "k100lc-kernels.generators.gemv.qdot.iq-codecs.iq4xs",
+    "k100lc-kernels.generators.gemv.qdot.iq-codecs.iq3xxs"
+  ]
+}

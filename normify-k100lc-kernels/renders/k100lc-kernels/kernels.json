@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels",
+  "updated_at": "2026-10-01T15:08:16.484Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "内核元数据表是构建与运行时的唯一依据，块参数头是各组内核的对照文档，汇编源按算子族分成六组。",
+    "en": "The metadata table is the single source of truth for build and runtime, the block-parameter headers document each kernel family, and the assembly sources are grouped into six families."
+  },
+  "order": [
+    "k100lc-kernels.kernels.spec",
+    "k100lc-kernels.kernels.headers",
+    "k100lc-kernels.kernels.asm"
+  ],
+  "groups": [
+    {
+      "id": "meta",
+      "title": {
+        "zh": "元数据",
+        "en": "Metadata"
+      },
+      "children": [
+        "k100lc-kernels.kernels.spec"
+      ]
+    },
+    {
+      "id": "docs",
+      "title": {
+        "zh": "块参数头",
+        "en": "Block Headers"
+      },
+      "children": [
+        "k100lc-kernels.kernels.headers"
+      ]
+    },
+    {
+      "id": "src",
+      "title": {
+        "zh": "汇编源",
+        "en": "Assembly Sources"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm"
+      ]
+    }
+  ]
+}

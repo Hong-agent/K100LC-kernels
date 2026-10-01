@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.7.6
+
+用编译器新写一个内核，把「解码注意力」这条**特性缺口**补上（并量化了它
+的瓶颈）。
+
+### 新增
+
+- **`attn_pv_part`**（第 123 个内核）：`out[d] = Σ_j P[j]·Vt[d,j]` 的分块版，
+  `vstride` 可自定义（直接挂在 `[dim, max_len]` 的转置 V 缓存上）。
+  **用仓库自己的 DSL 写、用仓库自己的编译器编**，产物逐字节提交到
+  `kernels/asm/k_new/attn_pv_part.s` + `kernels/kernel_spec.json`。
+- **`Attention`（Python 模型级算子）**：解码（M=1）注意力，用**已对账**的
+  内核拼出来，不依赖语义未验证的 `fa_decode_*`：
+  `scores = K·q` 与 `out = P·V` 都走 `gemv_f32_warp_k`（把 K / Vt 当权重
+  矩阵），中间是 `fill_k` 掩码 + `scale_mul_k` 缩放 + `softmax_k`。
+  与 NumPy 对账 `max_rel ~3e-7`（`examples/python_model_layer.py` 里新增用例，
+  覆盖 n_kv 不是 64 倍数时的掩码路径）。
+- 自检新增 `attn_pv_part` 用例（用例 61 → 62）。
+
+### 编译器（写这个内核时又查出两处）
+
+- **uniform 整数路径不支持 `<<`**（varying 支持）：`(1 << n) - 1` 这种掩码
+  写法在标量上直接报「uniform 不支持 <<」。现在补上 `<<`，顺带把
+  uniform 的 `/` `%`（2 的幂常量）也补齐。
+- **`global_load` 后面紧跟 `s_waitcnt vmcnt(0)`**：一个语句里连着发的几条
+  load 会串行等待。改成**延迟等待**——第一次真正用到这条值时再等，
+  同一个语句内的多条 load 因此可以同时在飞。
+
+### 实测与瓶颈定位
+
+`dim=128`，设备侧连续调用（不含主机往返）：
+
+| `n_kv` | 512 | 2048 | 8192 | 16384 | 32768 |
+|---:|---:|---:|---:|---:|---:|
+| us | 64 | 129 | 342 | 565 | 1016 |
+
+`n_kv=16384` 的拆解：**`softmax_k` 291 us**（一 warp 一行，解码时只有 1 个
+warp 扫 16384 列）+ `Vt·P` 131 us（只有 dim=128 个 warp）+ `K·q` 106 us。
+也就是说这条实现是「正确优先」，要快得按 KV 分块做 online softmax——
+已记入 ROADMAP B3，附完整拆解数据。
+
 ## 1.7.5
 
 端到端权重流基准进工具，并把 README 里过时的数字换掉。

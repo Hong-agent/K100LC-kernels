@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.toolchain.build",
+  "updated_at": "2026-10-01T15:08:33.538Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "build_all.sh 是总入口，它调用汇编内核构建与原生内核打包。",
+    "en": "build_all.sh is the top entry; it calls the assembly kernel build and native kernel packaging."
+  },
+  "order": [
+    "k100lc-kernels.toolchain.build.all",
+    "k100lc-kernels.toolchain.build.asm-kernels",
+    "k100lc-kernels.toolchain.build.native-kernels"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.gguf-dequant",
+  "updated_at": "2026-10-01T15:08:24.336Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "K-系列三种编码的整块解码：Q4_K → Q5_K（加高位平面）→ Q6_K（6bit 拼装）。",
+    "en": "Whole-block decoding for the three K-quant codecs: Q4_K, Q5_K (adds a high-bit plane) and Q6_K (6-bit assembly)."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.gguf-dequant.q4k",
+    "k100lc-kernels.kernels.asm.new.gguf-dequant.q5k",
+    "k100lc-kernels.kernels.asm.new.gguf-dequant.q6k"
+  ]
+}

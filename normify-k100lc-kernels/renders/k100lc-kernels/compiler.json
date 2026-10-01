@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.compiler",
+  "updated_at": "2026-10-01T15:08:31.820Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "编译器本体在 core，CLI 与导出工具是入口，examples 是 DSL 示例，tests 是正确性与动态启动验证。",
+    "en": "The compiler proper lives in core; the CLI and export tool are entry points, examples are DSL samples, and tests cover correctness and dynamic launch."
+  },
+  "order": [
+    "k100lc-kernels.compiler.core",
+    "k100lc-kernels.compiler.cli",
+    "k100lc-kernels.compiler.export",
+    "k100lc-kernels.compiler.examples",
+    "k100lc-kernels.compiler.tests"
+  ],
+  "groups": [
+    {
+      "id": "core",
+      "title": {
+        "zh": "编译器本体",
+        "en": "Compiler Core"
+      },
+      "children": [
+        "k100lc-kernels.compiler.core"
+      ]
+    },
+    {
+      "id": "iface",
+      "title": {
+        "zh": "接口",
+        "en": "Interfaces"
+      },
+      "children": [
+        "k100lc-kernels.compiler.cli",
+        "k100lc-kernels.compiler.export"
+      ]
+    },
+    {
+      "id": "samples",
+      "title": {
+        "zh": "示例与测试",
+        "en": "Samples & Tests"
+      },
+      "children": [
+        "k100lc-kernels.compiler.examples",
+        "k100lc-kernels.compiler.tests"
+      ]
+    }
+  ]
+}

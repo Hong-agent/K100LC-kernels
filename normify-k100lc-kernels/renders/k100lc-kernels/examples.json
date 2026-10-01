@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.examples",
+  "updated_at": "2026-10-01T15:08:35.556Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "从最小 GEMV 起步，再到真模型 INT4 层、模型级对账、预填充 GEMM 与 W4A8/W4A4 GEMV，最后是 C++ 调用。",
+    "en": "Start from the minimal GEMV, then a real-model INT4 layer, model-level reconciliation, prefill GEMM and W4A8/W4A4 GEMV, and finally the C++ call."
+  },
+  "order": [
+    "k100lc-kernels.examples.gemv-py",
+    "k100lc-kernels.examples.int4-gemv-py",
+    "k100lc-kernels.examples.model-layer-py",
+    "k100lc-kernels.examples.w4a4-gemm-py",
+    "k100lc-kernels.examples.w4a4-w4a8-gemv-py",
+    "k100lc-kernels.examples.cpp-alloc"
+  ]
+}

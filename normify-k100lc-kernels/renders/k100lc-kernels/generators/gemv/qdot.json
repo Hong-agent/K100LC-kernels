@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.gemv.qdot",
+  "updated_at": "2026-10-01T15:08:25.751Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "框架分层：公共前导与参数布局 → 行归约收尾 → 各编码的解码点积发射器 → 自检与注册表。",
+    "en": "Framework layers: shared prologue and argument layout, the row-reduction epilogue, the per-codec decode-and-dot emitters, then self-tests and the registry."
+  },
+  "order": [
+    "k100lc-kernels.generators.gemv.qdot.prologue",
+    "k100lc-kernels.generators.gemv.qdot.reduce",
+    "k100lc-kernels.generators.gemv.qdot.iq-codecs",
+    "k100lc-kernels.generators.gemv.qdot.k-codecs",
+    "k100lc-kernels.generators.gemv.qdot.selftest",
+    "k100lc-kernels.generators.gemv.qdot.registry"
+  ],
+  "groups": [
+    {
+      "id": "core",
+      "title": {
+        "zh": "框架骨架",
+        "en": "Framework Core"
+      },
+      "children": [
+        "k100lc-kernels.generators.gemv.qdot.prologue",
+        "k100lc-kernels.generators.gemv.qdot.reduce"
+      ]
+    },
+    {
+      "id": "codecs",
+      "title": {
+        "zh": "编码发射器",
+        "en": "Codec Emitters"
+      },
+      "children": [
+        "k100lc-kernels.generators.gemv.qdot.iq-codecs",
+        "k100lc-kernels.generators.gemv.qdot.k-codecs"
+      ]
+    },
+    {
+      "id": "verify",
+      "title": {
+        "zh": "验证与登记",
+        "en": "Verify & Register"
+      },
+      "children": [
+        "k100lc-kernels.generators.gemv.qdot.selftest",
+        "k100lc-kernels.generators.gemv.qdot.registry"
+      ]
+    }
+  ]
+}

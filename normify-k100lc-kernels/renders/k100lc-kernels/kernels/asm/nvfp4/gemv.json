@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.nvfp4.gemv",
+  "updated_at": "2026-10-01T15:08:20.940Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "普通 GEMV 按 K 方向拆分份数 S=1..4 分四组，每组覆盖 M=1..4 四个实例。",
+    "en": "The standard GEMV grouped by K-split count S=1..4, each covering the M=1..4 instances."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.nvfp4.gemv.s1",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv.s2",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv.s3",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv.s4"
+  ]
+}

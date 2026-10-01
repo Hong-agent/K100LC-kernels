@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.python.runtime",
+  "updated_at": "2026-10-01T15:08:30.131Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "构造与参数解析 → 设备内存操作 → 内核启动。",
+    "en": "Construction and argument parsing, device memory operations, then kernel launch."
+  },
+  "order": [
+    "k100lc-kernels.python.runtime.lifecycle",
+    "k100lc-kernels.python.runtime.memory",
+    "k100lc-kernels.python.runtime.launch"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.vision",
+  "updated_at": "2026-10-01T15:08:24.692Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "ViT 前向顺序：线性层 → LayerNorm → GELU → bias → RoPE → 自注意力。",
+    "en": "ViT forward order: linear layer, LayerNorm, GELU, bias, RoPE, then self-attention."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.vision.linear-f16",
+    "k100lc-kernels.kernels.asm.vision.ln",
+    "k100lc-kernels.kernels.asm.vision.gelu",
+    "k100lc-kernels.kernels.asm.vision.bias",
+    "k100lc-kernels.kernels.asm.vision.bias-s",
+    "k100lc-kernels.kernels.asm.vision.rope",
+    "k100lc-kernels.kernels.asm.vision.attn"
+  ]
+}

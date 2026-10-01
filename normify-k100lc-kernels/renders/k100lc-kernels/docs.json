@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.docs",
+  "updated_at": "2026-10-01T15:08:35.885Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "先读调用手册与内核参数表，再按需读模型级 API、ABI、INT4 格式与性能实测。",
+    "en": "Read the calling manual and kernel parameter table first, then the model-level API, ABI, INT4 format and performance notes as needed."
+  },
+  "order": [
+    "k100lc-kernels.docs.kernel-calling",
+    "k100lc-kernels.docs.kernels-table",
+    "k100lc-kernels.docs.model-runtime",
+    "k100lc-kernels.docs.abi",
+    "k100lc-kernels.docs.int4",
+    "k100lc-kernels.docs.performance"
+  ]
+}

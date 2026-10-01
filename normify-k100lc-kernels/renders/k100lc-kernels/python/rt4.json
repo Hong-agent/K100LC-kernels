@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.python.rt4",
+  "updated_at": "2026-10-01T15:08:31.474Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "读文件 → 建运行器 → GEMV 通路 / GEMM 通路。",
+    "en": "Read the file, build the runner, then the GEMV and GEMM paths."
+  },
+  "order": [
+    "k100lc-kernels.python.rt4.magic",
+    "k100lc-kernels.python.rt4.container",
+    "k100lc-kernels.python.rt4.runner",
+    "k100lc-kernels.python.rt4.gemv",
+    "k100lc-kernels.python.rt4.gemm"
+  ]
+}

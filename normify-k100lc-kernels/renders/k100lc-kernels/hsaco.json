@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.hsaco",
+  "updated_at": "2026-10-01T15:08:16.128Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "先是单个代码对象的拼装（从零 / 完整 / 多内核），再合并成完整包，最后把 HSACO 的元数据读回来生成运行时表格。",
+    "en": "Single code-object assembly first (from scratch / full / multi-kernel), then merging into the full package, then reading metadata back to generate runtime tables."
+  },
+  "order": [
+    "k100lc-kernels.hsaco.from-scratch",
+    "k100lc-kernels.hsaco.full-builder",
+    "k100lc-kernels.hsaco.multi-builder",
+    "k100lc-kernels.hsaco.merge",
+    "k100lc-kernels.hsaco.metadata-read",
+    "k100lc-kernels.hsaco.symbol-names",
+    "k100lc-kernels.hsaco.kernel-table"
+  ],
+  "groups": [
+    {
+      "id": "make",
+      "title": {
+        "zh": "单对象拼装",
+        "en": "Object Assembly"
+      },
+      "children": [
+        "k100lc-kernels.hsaco.from-scratch",
+        "k100lc-kernels.hsaco.full-builder",
+        "k100lc-kernels.hsaco.multi-builder"
+      ]
+    },
+    {
+      "id": "combine",
+      "title": {
+        "zh": "合并与产出",
+        "en": "Merge & Output"
+      },
+      "children": [
+        "k100lc-kernels.hsaco.merge"
+      ]
+    },
+    {
+      "id": "meta",
+      "title": {
+        "zh": "元数据与表格",
+        "en": "Metadata & Tables"
+      },
+      "children": [
+        "k100lc-kernels.hsaco.metadata-read",
+        "k100lc-kernels.hsaco.symbol-names",
+        "k100lc-kernels.hsaco.kernel-table"
+      ]
+    }
+  ]
+}

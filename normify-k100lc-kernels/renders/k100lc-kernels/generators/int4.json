@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.int4",
+  "updated_at": "2026-10-01T15:08:27.066Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "compressed-tensors INT4 路径：点积内核 → 反量化对照 → 参考与参数推导 → 上卡自检 → 注册表。",
+    "en": "The compressed-tensors INT4 path: dot kernel, dequant counterpart, reference and parameter derivation, on-device self-test, registry."
+  },
+  "order": [
+    "k100lc-kernels.generators.int4.dot",
+    "k100lc-kernels.generators.int4.dequant",
+    "k100lc-kernels.generators.int4.verify",
+    "k100lc-kernels.generators.int4.selftest",
+    "k100lc-kernels.generators.int4.registry"
+  ]
+}

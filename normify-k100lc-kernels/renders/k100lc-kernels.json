@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels",
+  "updated_at": "2026-10-01T15:08:59.507Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "从下往上看：产物与内核源 → 构建链（汇编器/代码对象/生成器/编译器/工具链）→ 运行与调用（运行时/Python/示例）。",
+    "en": "Read bottom-up: artifacts and kernel sources, then the build chain (assembler, code objects, generators, compiler, toolchain), then runtime and bindings (HSA runtime, Python, examples)."
+  },
+  "order": [
+    "k100lc-kernels.prebuilt",
+    "k100lc-kernels.kernels",
+    "k100lc-kernels.docs",
+    "k100lc-kernels.asm",
+    "k100lc-kernels.hsaco",
+    "k100lc-kernels.generators",
+    "k100lc-kernels.compiler",
+    "k100lc-kernels.toolchain",
+    "k100lc-kernels.runtime",
+    "k100lc-kernels.python",
+    "k100lc-kernels.examples"
+  ],
+  "groups": [
+    {
+      "id": "artifacts",
+      "title": {
+        "zh": "产物与内核源",
+        "en": "Artifacts & Kernels"
+      },
+      "children": [
+        "k100lc-kernels.prebuilt",
+        "k100lc-kernels.kernels",
+        "k100lc-kernels.docs"
+      ]
+    },
+    {
+      "id": "build",
+      "title": {
+        "zh": "构建与生成",
+        "en": "Build & Generation"
+      },
+      "children": [
+        "k100lc-kernels.asm",
+        "k100lc-kernels.hsaco",
+        "k100lc-kernels.generators",
+        "k100lc-kernels.compiler",
+        "k100lc-kernels.toolchain"
+      ]
+    },
+    {
+      "id": "runtime",
+      "title": {
+        "zh": "运行与调用",
+        "en": "Runtime & Bindings"
+      },
+      "children": [
+        "k100lc-kernels.runtime",
+        "k100lc-kernels.python",
+        "k100lc-kernels.examples"
+      ]
+    }
+  ]
+}

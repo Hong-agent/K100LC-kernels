@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.asm",
+  "updated_at": "2026-10-01T15:08:15.787Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "数据流：载入编码表 → 解析 .s 源 → 匹配指令 → 编码字段/SDWA → 输出机器码。",
+    "en": "Data flow: load the encoding table, parse the .s source, match instructions, encode fields/SDWA, emit machine code."
+  },
+  "order": [
+    "k100lc-kernels.asm.encodings",
+    "k100lc-kernels.asm.source-parse",
+    "k100lc-kernels.asm.operands",
+    "k100lc-kernels.asm.instr-match",
+    "k100lc-kernels.asm.encoding",
+    "k100lc-kernels.asm.sdwa",
+    "k100lc-kernels.asm.cli"
+  ]
+}

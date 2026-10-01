@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.python.model",
+  "updated_at": "2026-10-01T15:08:30.454Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "先看工作区与连续入队，再看四类线性层、归一化/MLP，最后是 MoE、KV cache 与采样。",
+    "en": "Start with the workspace and queued sequences, then the four linear-layer kinds and normalization/MLP, and finally MoE, KV cache and sampling."
+  },
+  "order": [
+    "k100lc-kernels.python.model.workspace",
+    "k100lc-kernels.python.model.linear",
+    "k100lc-kernels.python.model.norm",
+    "k100lc-kernels.python.model.mlp",
+    "k100lc-kernels.python.model.moe",
+    "k100lc-kernels.python.model.kv",
+    "k100lc-kernels.python.model.sampler"
+  ],
+  "groups": [
+    {
+      "id": "base",
+      "title": {
+        "zh": "执行基础",
+        "en": "Execution Base"
+      },
+      "children": [
+        "k100lc-kernels.python.model.workspace"
+      ]
+    },
+    {
+      "id": "linear",
+      "title": {
+        "zh": "线性层",
+        "en": "Linear Layers"
+      },
+      "children": [
+        "k100lc-kernels.python.model.linear"
+      ]
+    },
+    {
+      "id": "block",
+      "title": {
+        "zh": "层内算子",
+        "en": "Block Operators"
+      },
+      "children": [
+        "k100lc-kernels.python.model.norm",
+        "k100lc-kernels.python.model.mlp",
+        "k100lc-kernels.python.model.moe"
+      ]
+    },
+    {
+      "id": "gen",
+      "title": {
+        "zh": "生成阶段",
+        "en": "Generation"
+      },
+      "children": [
+        "k100lc-kernels.python.model.kv",
+        "k100lc-kernels.python.model.sampler"
+      ]
+    }
+  ]
+}

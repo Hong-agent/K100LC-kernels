@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "project": "normify-k100lc-kernels",
+  "compiled_at": "2026-10-01T15:09:45.300Z",
+  "stats": {
+    "tree_count": 1,
+    "module_count": 296,
+    "leaf_count": 232,
+    "api_count": 259,
+    "dep_count": 111,
+    "cross_tree_dep_count": 0,
+    "max_depth": 6,
+    "layout_count": 62,
+    "planned_count": 0,
+    "deprecated_count": 0,
+    "policy_rule_count": 2,
+    "change_count": 1,
+    "open_change_count": 0
+  },
+  "warnings": {
+    "structure/leaf-too-coarse": 15,
+    "structure/leaf-too-coarse-many": 1,
+    "evidence/root-no-source": 1
+  },
+  "artifacts": {
+    "tree.json": {
+      "sha256": "66fd3c282502f8d6298aaa59a15116b1f2e00fcf9c2608b661da0c45c1920e6a",
+      "bytes": 596210
+    },
+    "outline.md": {
+      "sha256": "ed5a9d367e5debc92de3c18c21e7b4dec9352309b01bf0d735835372b976f2b8",
+      "bytes": 70209
+    },
+    "api-index.json": {
+      "sha256": "2697b98c532b7f9737ebbb7e648208ce77932aad5853e79561641d1af54f68f9",
+      "bytes": 20362
+    },
+    "receipt.json": {
+      "sha256": "6933d1467ca1ef8306525bcf617501ec61c1b4cc5a16bf26c572948aabe1b779",
+      "bytes": 1012
+    }
+  }
+}

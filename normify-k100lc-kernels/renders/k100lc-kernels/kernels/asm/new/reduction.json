@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.reduction",
+  "updated_at": "2026-10-01T15:08:22.308Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "argmax 的两段式实现：分块 partial 与跨块合并。",
+    "en": "Two-stage argmax: chunked partials then cross-chunk combine."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.reduction.argmax-part",
+    "k100lc-kernels.kernels.asm.new.reduction.argmax-comb",
+    "k100lc-kernels.kernels.asm.new.reduction.argmax"
+  ]
+}

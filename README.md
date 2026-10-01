@@ -114,7 +114,8 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
 `k100lc_kernels.model` 提供可直接组合的推理算子：`F32Linear` /
 `DotLinear`（INT4、GGUF 11 类编码）/ `Int4Linear`（W4A16 / W4A8 / W4A4）/
 `RT4Linear` / `RMSNorm` / `SwiGLU` / `MLP` / `MoECombine` / `MoEExperts` /
-`KVCache` / `Sampler` / `run_sequence`。权重上传一次、工作缓冲复用、整段
+`KVCache` / `Attention`（解码注意力，用已对账的内核拼）/ `Sampler` /
+`run_sequence`。权重上传一次、工作缓冲复用、整段
 前向只 sync 一次；启动开销从约 10 us 降到约 7 us。
 
 ```bash

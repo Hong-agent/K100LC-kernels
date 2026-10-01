@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.ssm",
+  "updated_at": "2026-10-01T15:08:23.656Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "卷积/SSM 路径：状态滚动 → conv1d+SiLU → GDN → α/β 门控。",
+    "en": "The convolution/SSM path: state rolling, conv1d+SiLU, GDN, then the alpha/beta gate."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.ssm.conv-state",
+    "k100lc-kernels.kernels.asm.new.ssm.conv1d-silu",
+    "k100lc-kernels.kernels.asm.new.ssm.gdn",
+    "k100lc-kernels.kernels.asm.new.ssm.gdn-k2",
+    "k100lc-kernels.kernels.asm.new.ssm.ab-gate"
+  ]
+}

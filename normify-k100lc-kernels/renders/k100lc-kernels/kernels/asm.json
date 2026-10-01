@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm",
+  "updated_at": "2026-10-01T15:08:17.484Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "六组汇编内核：注意力、W4A4 GEMM、W4A4/W4A8 GEMV、NVFP4、通用 Transformer/序列算子与视觉塔。",
+    "en": "Six assembly kernel families: attention, W4A4 GEMM, W4A4/W4A8 GEMV, NVFP4, general Transformer/sequence operators, and the vision tower."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.fa",
+    "k100lc-kernels.kernels.asm.gemm",
+    "k100lc-kernels.kernels.asm.gemv",
+    "k100lc-kernels.kernels.asm.nvfp4",
+    "k100lc-kernels.kernels.asm.new",
+    "k100lc-kernels.kernels.asm.vision"
+  ]
+}

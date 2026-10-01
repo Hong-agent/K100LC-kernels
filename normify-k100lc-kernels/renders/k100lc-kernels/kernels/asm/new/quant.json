@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.quant",
+  "updated_at": "2026-10-01T15:08:22.647Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "激活量化：通用行式 int4/int8 量化，以及 attention 专用的 Q 量化。",
+    "en": "Activation quantization: the general row-wise int4/int8 quantizers plus the attention-specific Q quantizer."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.quant.rows",
+    "k100lc-kernels.kernels.asm.new.quant.rows-a8",
+    "k100lc-kernels.kernels.asm.new.quant.attn-q"
+  ]
+}

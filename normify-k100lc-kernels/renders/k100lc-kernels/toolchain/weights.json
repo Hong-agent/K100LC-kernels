@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.toolchain.weights",
+  "updated_at": "2026-10-01T15:08:34.550Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "先定位真权重与码本表，再用参考解码器对账，最后是 INT4 的参考解码与引擎直跑清单。",
+    "en": "Locate real weights and lookup tables, reconcile with the reference decoder, then handle the INT4 reference decode and the engine manifest."
+  },
+  "order": [
+    "k100lc-kernels.toolchain.weights.gguf-sample",
+    "k100lc-kernels.toolchain.weights.iq-tables",
+    "k100lc-kernels.toolchain.weights.iq-dequant",
+    "k100lc-kernels.toolchain.weights.ct-int4",
+    "k100lc-kernels.toolchain.weights.int4-manifest"
+  ],
+  "groups": [
+    {
+      "id": "gguf",
+      "title": {
+        "zh": "GGUF 参考",
+        "en": "GGUF Reference"
+      },
+      "children": [
+        "k100lc-kernels.toolchain.weights.iq-tables",
+        "k100lc-kernels.toolchain.weights.iq-dequant",
+        "k100lc-kernels.toolchain.weights.gguf-sample"
+      ]
+    },
+    {
+      "id": "int4",
+      "title": {
+        "zh": "INT4 参考",
+        "en": "INT4 Reference"
+      },
+      "children": [
+        "k100lc-kernels.toolchain.weights.ct-int4",
+        "k100lc-kernels.toolchain.weights.int4-manifest"
+      ]
+    }
+  ]
+}

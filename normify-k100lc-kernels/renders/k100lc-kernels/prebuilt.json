@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.prebuilt",
+  "updated_at": "2026-10-01T15:08:15.448Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "仓库分发的四个产物：完整内核包 HSACO 与基线 HSACO 是内核二进制，引擎 .so 驱动它们，C 头给出运行时需要的参数表。",
+    "en": "The four shipped artifacts: the full and baseline HSACOs hold the kernels, the engine .so drives them, and the C header supplies the runtime argument tables."
+  },
+  "order": [
+    "k100lc-kernels.prebuilt.kernels-hsaco",
+    "k100lc-kernels.prebuilt.base-hsaco",
+    "k100lc-kernels.prebuilt.engine-lib",
+    "k100lc-kernels.prebuilt.kernel-header"
+  ]
+}

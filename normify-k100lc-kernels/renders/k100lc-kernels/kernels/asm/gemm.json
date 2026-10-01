@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.gemm",
+  "updated_at": "2026-10-01T15:08:18.194Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "同一算子的两种网格组织：2D 分块版与绕开 2D grid 限制的 flat 1D 版。",
+    "en": "One operator with two grid layouts: the 2D tiled version and the flat 1D version that avoids the 2D-grid limitation."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.gemm.w4a4",
+    "k100lc-kernels.kernels.asm.gemm.w4a4-flat"
+  ]
+}

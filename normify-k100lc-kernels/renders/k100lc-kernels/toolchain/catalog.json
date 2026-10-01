@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.toolchain.catalog",
+  "updated_at": "2026-10-01T15:08:33.877Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "先从 HSACO 生成 catalog.json，再由它生成内核文档。",
+    "en": "Generate catalog.json from the HSACO first, then generate the kernel docs from it."
+  },
+  "order": [
+    "k100lc-kernels.toolchain.catalog.make",
+    "k100lc-kernels.toolchain.catalog.kernel-docs"
+  ]
+}

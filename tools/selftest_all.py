@@ -1065,6 +1065,31 @@ def t_vit_ln(ctx: Ctx):
     return judge(np.abs(ctx.get(py, rows * dim).reshape(rows, dim) - ref).max(), ref)
 
 
+@case("attn", "attn_pv_part")
+def t_attn_pv(ctx: Ctx):
+    """`out[d] = Σ_j P[j]·Vt[d,j]` 的分块版（编译器生成的核）。
+
+    参数 `(partial, p, vt, n_kv, vstride, nb_shift, jper)`：
+    一个 work-item 负责 `(d, blk)`，`d = gid >> nb_shift`、`blk = gid & (2^nb_shift-1)`，
+    块内做 `jper` 个 FMA 写 `partial[d*nb + blk]`；再交给 `reduce_blocks_k` 归约。
+    `vstride` 是 Vt 的行距（可以与 n_kv 不同，方便直接挂在 `[dim, max_len]` 缓存上）。
+    """
+    dim, n_kv, nb, stride = 128, 512, 8, 640
+    jper = n_kv // nb
+    rng = np.random.default_rng(120)
+    p = rng.random(n_kv).astype(np.float32)
+    p /= p.sum()
+    vt = np.zeros((dim, stride), np.float32)
+    vt[:, :n_kv] = rng.standard_normal((dim, n_kv))
+    part = ctx.out(dim * nb)
+    ctx.launch("attn_pv_part", (dim * nb + 63) // 64, 64,
+               [part, ctx.buf(p), ctx.buf(vt), n_kv, stride,
+                nb.bit_length() - 1, jper])
+    got = ctx.get(part, dim * nb).reshape(dim, nb).sum(axis=1)
+    ref = vt[:, :n_kv] @ p
+    return judge(np.abs(got - ref).max(), ref)
+
+
 @case("seq", "split_qkv_k")
 def t_split_qkv(ctx: Ctx):
     """把一个 token 的 `[qn + kn + vn]` 行拆成 q / k / v 三段。

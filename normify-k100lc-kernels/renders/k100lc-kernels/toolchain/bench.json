@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.toolchain.bench",
+  "updated_at": "2026-10-01T15:08:35.230Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "三条基准：按层形状外推、模型级五路对比、MoE 两路对比。",
+    "en": "Three benchmarks: per-layer-shape extrapolation, the five-way model-level comparison, and the two-way MoE comparison."
+  },
+  "order": [
+    "k100lc-kernels.toolchain.bench.int4-layers",
+    "k100lc-kernels.toolchain.bench.model-paths",
+    "k100lc-kernels.toolchain.bench.moe"
+  ]
+}

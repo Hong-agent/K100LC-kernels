@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.python",
+  "updated_at": "2026-10-01T15:08:29.431Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "从下到上：Runtime 驱动引擎、catalog 提供参数表、model 组合出算子，quant/rt4 负责权重侧准备，cli 与 engine-binding 是两个入口。",
+    "en": "Bottom-up: Runtime drives the engine, catalog supplies argument tables, model composes operators, quant/rt4 prepare the weight side, and cli plus engine-binding are the two entry points."
+  },
+  "order": [
+    "k100lc-kernels.python.api",
+    "k100lc-kernels.python.cli",
+    "k100lc-kernels.python.catalog",
+    "k100lc-kernels.python.runtime",
+    "k100lc-kernels.python.model",
+    "k100lc-kernels.python.quant",
+    "k100lc-kernels.python.rt4",
+    "k100lc-kernels.python.engine-binding"
+  ],
+  "groups": [
+    {
+      "id": "core",
+      "title": {
+        "zh": "驱动与目录",
+        "en": "Driver & Catalog"
+      },
+      "children": [
+        "k100lc-kernels.python.runtime",
+        "k100lc-kernels.python.catalog",
+        "k100lc-kernels.python.engine-binding"
+      ]
+    },
+    {
+      "id": "ops",
+      "title": {
+        "zh": "模型级算子",
+        "en": "Model Operators"
+      },
+      "children": [
+        "k100lc-kernels.python.model"
+      ]
+    },
+    {
+      "id": "weights",
+      "title": {
+        "zh": "权重准备",
+        "en": "Weight Preparation"
+      },
+      "children": [
+        "k100lc-kernels.python.quant",
+        "k100lc-kernels.python.rt4"
+      ]
+    },
+    {
+      "id": "entry",
+      "title": {
+        "zh": "入口与导出",
+        "en": "Entry & Exports"
+      },
+      "children": [
+        "k100lc-kernels.python.api",
+        "k100lc-kernels.python.cli"
+      ]
+    }
+  ]
+}

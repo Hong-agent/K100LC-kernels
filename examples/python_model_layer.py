@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, MLP, MoECombine,  # noqa: E402
-                            MoEExperts, RMSNorm, Runtime, Workspace,
+                            Attention, MoEExperts, RMSNorm, Runtime, Workspace,
                             dequant_int4_group128, pack_int4_group128)
 from iq_dequant import dequant_iq4_nl, dequant_q4_0_fast  # noqa: E402
 
@@ -237,6 +237,29 @@ def run_int4_fast(rt: Runtime, rows: int, dim: int, ffn: int,
     ws.free()
 
 
+def run_attention(rt: Runtime, dim: int, max_len: int, rng) -> None:
+    """解码注意力（`Attention`）与 NumPy 参考对账 + 计时。
+
+    覆盖两种情况：`n_kv` 不是 64 的倍数（要走尾部 -1e30 掩码）与正好是。
+    """
+    for n_kv in (100, 640):
+        attn = Attention(rt, dim=dim, max_len=max_len, tag=f"attn{n_kv}")
+        k = rng.standard_normal((n_kv, dim)).astype(np.float32)
+        v = rng.standard_normal((n_kv, dim)).astype(np.float32)
+        q = rng.standard_normal(dim).astype(np.float32)
+        attn.append(k, v)
+        got = attn.forward(q)
+        s = (k @ q) / np.sqrt(dim)
+        e = np.exp(s - s.max())
+        ref = (e / e.sum()) @ v
+        err = _rel(got, ref)
+        if err > 1e-5:
+            FAILURES.append(f"attention(n_kv={n_kv})")
+        t = _bench(lambda: attn.forward(q), 10)
+        print(f"[attn ] n_kv={n_kv} dim={dim} max_rel={err:.2e} time={t * 1e3:.1f} us")
+        attn.ws.free()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=4)
@@ -247,6 +270,7 @@ def main() -> int:
 
     rng = np.random.default_rng(2026)
     rt = Runtime()
+    run_attention(rt, 128, 640, rng)
     run_f32(rt, args.rows, args.dim, args.ffn, rng)
     run_int4(rt, args.rows, args.dim, args.ffn, rng)
     run_moe(rt, args.rows, args.dim, args.moe_exp, rng)

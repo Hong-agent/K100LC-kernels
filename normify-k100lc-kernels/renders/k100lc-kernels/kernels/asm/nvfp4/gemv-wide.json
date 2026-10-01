@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.nvfp4.gemv-wide",
+  "updated_at": "2026-10-01T15:08:20.596Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "宽列版本按 M=1..4 分四组，每组含两种列宽。",
+    "en": "The wide-column variant grouped by M=1..4, two column widths each."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.nvfp4.gemv-wide.m1",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv-wide.m2",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv-wide.m3",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv-wide.m4"
+  ]
+}

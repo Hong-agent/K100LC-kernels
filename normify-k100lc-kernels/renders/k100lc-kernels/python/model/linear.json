@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.python.model.linear",
+  "updated_at": "2026-10-01T15:08:30.792Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "按权重形态由简到繁：f32 → 量化原生点积 → RT4 → compressed-tensors INT4 三通路。",
+    "en": "From simplest to richest weight form: f32, native decode-and-dot, RT4, then the three-path compressed-tensors INT4."
+  },
+  "order": [
+    "k100lc-kernels.python.model.linear.f32",
+    "k100lc-kernels.python.model.linear.dot",
+    "k100lc-kernels.python.model.linear.rt4",
+    "k100lc-kernels.python.model.linear.int4"
+  ]
+}

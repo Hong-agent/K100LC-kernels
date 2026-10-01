@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.fa",
+  "updated_at": "2026-10-01T15:08:17.841Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "FA 分块注意力（fa_int4）与解码期注意力：先看单行解码与其 partial 合并，再看多行变体。",
+    "en": "The tiled FA kernel (fa_int4) and decode-time attention: read single-row decode and its partial combine first, then the multi-row variants."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.fa.int4",
+    "k100lc-kernels.kernels.asm.fa.decode",
+    "k100lc-kernels.kernels.asm.fa.decode-comb",
+    "k100lc-kernels.kernels.asm.fa.decode-rows",
+    "k100lc-kernels.kernels.asm.fa.decode-rows-comb"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.kv",
+  "updated_at": "2026-10-01T15:08:23.312Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "K 与 V 分开追加，各自量化打包后写入 KV cache。",
+    "en": "K and V are appended separately, each quantized, packed and written into the KV cache."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.kv.append-k",
+    "k100lc-kernels.kernels.asm.new.kv.append-v"
+  ]
+}

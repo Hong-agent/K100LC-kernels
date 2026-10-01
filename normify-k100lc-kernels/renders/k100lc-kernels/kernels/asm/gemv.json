@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.gemv",
+  "updated_at": "2026-10-01T15:08:18.522Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "先在激活侧量化，再走 W4A4 或 W4A8 的权重解码 GEMV。",
+    "en": "Quantize on the activation side first, then run the W4A4 or W4A8 weight-decode GEMV."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.gemv.act-quant",
+    "k100lc-kernels.kernels.asm.gemv.w4a4",
+    "k100lc-kernels.kernels.asm.gemv.w4a8"
+  ],
+  "groups": [
+    {
+      "id": "pre",
+      "title": {
+        "zh": "激活量化前置",
+        "en": "Activation Pre-step"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.gemv.act-quant"
+      ]
+    },
+    {
+      "id": "w4a4",
+      "title": {
+        "zh": "W4A4 通路",
+        "en": "W4A4 Path"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.gemv.w4a4"
+      ]
+    },
+    {
+      "id": "w4a8",
+      "title": {
+        "zh": "W4A8 通路",
+        "en": "W4A8 Path"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.gemv.w4a8"
+      ]
+    }
+  ]
+}

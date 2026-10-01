@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.elementwise",
+  "updated_at": "2026-10-01T15:08:21.639Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "无依赖的逐元素算子，都可 grid-stride 启动。",
+    "en": "Dependency-free element-wise operators, all usable with a grid-stride launch."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.elementwise.fill",
+    "k100lc-kernels.kernels.asm.new.elementwise.add-inplace",
+    "k100lc-kernels.kernels.asm.new.elementwise.scale-mul",
+    "k100lc-kernels.kernels.asm.new.elementwise.silu-mul",
+    "k100lc-kernels.kernels.asm.new.elementwise.sigmoid-mul",
+    "k100lc-kernels.kernels.asm.new.elementwise.concat2"
+  ]
+}

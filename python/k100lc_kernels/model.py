@@ -40,6 +40,7 @@ __all__ = [
     "cdiv", "div_magic", "Workspace",
     "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
     "RMSNorm", "SwiGLU", "MLP", "MoECombine", "MoEExperts", "KVCache", "Sampler",
+    "Attention",
     "run_sequence",
 ]
 
@@ -650,6 +651,121 @@ class MoEExperts:
         out = self.forward_device(px, rows, ids, weights, sync=True)
         return self.rt.download(out, rows * self.out_dim, np.float32) \
             .reshape(rows, self.out_dim)
+
+
+class Attention:
+    """解码（M=1）注意力：`scores = K·q` → softmax → `P·V`。
+
+    全部用**已对账**的内核拼出来，不依赖包里语义未验证的 `fa_decode_*`。
+    关键是「矩阵乘向量」这一步全部交给 `gemv_f32_warp_k`（warp-per-row、写死在
+    汇编里、实测 430 GB/s），而不是自己写标量循环：
+
+    ==============  ==========================================================
+    步骤            表达式 / 内核
+    ==============  ==========================================================
+    `scores=K·q`    `scores[n] = Σ_d K[n,d]·q[d]` → `gemv_f32_warp_k`（**K 当权重矩阵**）
+    尾部掩码        `fill_k`（padding 段填 -1e30）
+    缩放            `scale_mul_k`（1/√dim）
+    softmax         `softmax_k`
+    `out=P·V`       `out[d] = Σ_j Vt[d,j]·P[j]` → `gemv_f32_warp_k`（**Vt 当权重矩阵**）
+    ==============  ==========================================================
+
+    布局：`K [max_len, dim]` 行主序；`Vt [dim, max_len]`（**转置**，这样
+    `out = Vt·P` 就是标准 GEMV）；`max_len` 必须是 64 的倍数（softmax 要求）。
+    K / Vt 里没写到的格子保持 0，尾部用 -1e30 掩码掉。
+
+    ```python
+    attn = Attention(rt, dim=128, max_len=4096)
+    attn.append(k, v)                 # k [rows, dim]、v [rows, dim]
+    out = attn.forward(q)             # q [dim] → [dim]
+    ```
+    """
+
+    def __init__(self, rt: Runtime, dim: int, max_len: int,
+                 ws: Workspace | None = None, tag: str = "attn",
+                 n_split: int = 8):
+        if dim % 64:
+            raise ValueError(f"Attention dim={dim} 必须是 64 的倍数")
+        if max_len % 64:
+            raise ValueError(f"Attention max_len={max_len} 必须是 64 的倍数")
+        self.rt = rt
+        self.dim, self.max_len = int(dim), int(max_len)
+        self.tag = tag
+        self._own_ws = ws is None
+        self.ws = ws or Workspace(rt)
+        # K / Vt 必须从 0 开始（没写到的格子要参与 softmax / GEMV，得是 0）
+        self.k = self.ws.buffer(tag + ".k", max_len * dim * 4)
+        rt.memset(self.k, 0, max_len * dim * 4)
+        self.vt = self.ws.buffer(tag + ".vt", dim * max_len * 4)
+        rt.memset(self.vt, 0, dim * max_len * 4)
+        self.scores = self.ws.buffer(tag + ".scores", max_len * 4)
+        self.probs = self.ws.buffer(tag + ".probs", max_len * 4)
+        self.out = self.ws.buffer(tag + ".out", dim * 4)
+        self.q = self.ws.buffer(tag + ".q", dim * 4)
+        self.length = 0
+
+    def append_device(self, k_dev: int, v_dev: int, rows: int) -> None:
+        """追加 `rows` 个 token 的 K/V；V 转置后写进 `Vt`。"""
+        if self.length + rows > self.max_len:
+            raise ValueError(f"KV 溢出：{self.length}+{rows} > {self.max_len}")
+        off = self.length
+        self.rt.copy_dev(self.k + off * self.dim * 4, int(k_dev),
+                         rows * self.dim * 4)
+        v = self.rt.download(int(v_dev), rows * self.dim, np.float32) \
+            .reshape(rows, self.dim)
+        self._store_vt(v, off, rows)
+        self.length += rows
+
+    def append(self, k: np.ndarray, v: np.ndarray) -> None:
+        k = np.ascontiguousarray(k, dtype=np.float32).reshape(-1, self.dim)
+        v = np.ascontiguousarray(v, dtype=np.float32).reshape(-1, self.dim)
+        rows = k.shape[0]
+        if self.length + rows > self.max_len:
+            raise ValueError(f"KV 溢出：{self.length}+{rows} > {self.max_len}")
+        off = self.length
+        self.rt.upload(self.k + off * self.dim * 4, k.reshape(-1))
+        self._store_vt(v, off, rows)
+        self.length += rows
+
+    def _store_vt(self, v: np.ndarray, off: int, rows: int) -> None:
+        buf = np.empty(rows, dtype=np.float32)
+        for d in range(self.dim):
+            np.copyto(buf, v[:, d])
+            self.rt.upload(self.vt + (d * self.max_len + off) * 4, buf)
+
+    def reset(self) -> None:
+        self.length = 0
+
+    def forward_device(self, q_dev: int, n_kv: int | None = None,
+                       sync: bool = False) -> int:
+        """在设备上算一次解码注意力，返回 `out[dim]` 的设备指针。"""
+        n_kv = self.length if n_kv is None else int(n_kv)
+        if n_kv <= 0:
+            raise ValueError("n_kv 必须为正")
+        L = self.max_len
+        # 1) scores = K·q（K 当权重矩阵：行=位置，列=dim）
+        self.rt.launch("gemv_f32_warp_k", L, 64,
+                       [self.k, int(q_dev), self.scores, L, self.dim, 64])
+        # 2) 尾部掩码 + 缩放
+        if L > n_kv:
+            self.rt.launch("fill_k", -(-(L - n_kv) // 64), 64,
+                           [self.scores + n_kv * 4, -1e30, L - n_kv])
+        self.rt.launch("scale_mul_k", -(-L // 64), 64,
+                       [self.scores, 1.0 / float(self.dim) ** 0.5, L])
+        # 3) softmax
+        self.rt.launch("softmax_k", 1, 64, [self.probs, self.scores, 1, L, 64])
+        # 4) out = Vt·P（Vt 当权重矩阵：行=dim，列=位置）
+        self.rt.launch("gemv_f32_warp_k", self.dim, 64,
+                       [self.vt, self.probs, self.out, self.dim, L, 64])
+        if sync:
+            self.rt.sync()
+        return self.out
+
+    def forward(self, q: np.ndarray, n_kv: int | None = None) -> np.ndarray:
+        q = np.ascontiguousarray(q, dtype=np.float32).reshape(-1)
+        self.rt.upload(self.q, q)
+        out = self.forward_device(self.q, n_kv, sync=True)
+        return self.rt.download(out, self.dim, np.float32)
 
 
 class KVCache:

@@ -75,6 +75,9 @@ class Val:
     reg: int | None
     ty: str
     value: int | float | None = None
+    # 这条值是一次 global_load 的结果、还没等过 `s_waitcnt`（延迟等待：同一个
+    # 语句里连续几个 load 可以同时在飞，第一次用到时才排空）
+    pending: bool = False
 
 
 class CodeGen:
@@ -96,6 +99,7 @@ class CodeGen:
         self.live_temps: set[int] = set()
         self.free_temps: list[int] = []
         self.new_temps: list[int] = []        # as_vreg 为常量/标量新建的临时
+        self.pending_vals: list[Val] = []     # 发出去还没排空的 load 结果
         self.tmp_s = 64
         self.addr_v = 200
         self.save_s = 48
@@ -303,6 +307,8 @@ class CodeGen:
         return v.kind in ("s", "lit") and v.ty != "f32"
 
     def as_vreg(self, v: Val) -> int:
+        if v.pending:
+            self._wait_loads()
         if v.kind == "v":
             return v.reg
         r = self.alloc_tmp_v()
@@ -320,6 +326,8 @@ class CodeGen:
         return r
 
     def as_sreg(self, v: Val) -> int:
+        if v.pending:
+            self._wait_loads()
         if v.kind == "s":
             return v.reg
         if v.kind == "lit":
@@ -327,6 +335,20 @@ class CodeGen:
             self.emit(f"s_mov_b32 s{r}, {int(v.value)}")
             return r
         raise CompileError(f"不是 uniform 值: {v}")
+
+    def _wait_loads(self) -> None:
+        """把所有还在飞的 global_load 排空（`s_waitcnt vmcnt(0)`）。
+
+        一次 `vmcnt(0)` 会把**所有**未完成的 VMEM 载入都等到，所以这里可以
+        一次性把所有 pending 标清掉——这正是「延迟等待」能提升访存并行度的
+        原因：同一个语句里连着发的几条 load 会一起在飞。
+        """
+        if not self.pending_vals:
+            return
+        self.emit("s_waitcnt vmcnt(0)")
+        for pv in self.pending_vals:
+            pv.pending = False
+        self.pending_vals.clear()
 
     def type_of(self, node) -> str:
         if isinstance(node, ast.Name):
@@ -466,9 +488,21 @@ class CodeGen:
             dst = self._alloc_tmp_s()
             m = {"+": "s_add_u32", "-": "s_sub_u32", "&": "s_and_b32",
                  "|": "s_or_b32", "^": "s_xor_b32", "*": "s_mul_i32"}
-            if op == ">>":
+            if op == "<<":
+                self.emit(f"s_lshl_b32 s{dst}, s{sa}, s{sb}")
+            elif op == ">>":
                 self.emit(f"{'s_ashr_i32' if ty == 's32' else 's_lshr_b32'} "
                           f"s{dst}, s{sa}, s{sb}")
+            elif op in ("/", "%"):
+                # 与整数 varying 路径同约定：只支持 2 的幂常量除数
+                d = int(b.value) if b.kind == "lit" else None
+                if d is None or d <= 0 or (d & (d - 1)) != 0 or ty == "s32":
+                    raise CompileError(
+                        f"uniform int {op} 只支持 2 的幂常量除数（收到 {b!r}）")
+                if op == "/":
+                    self.emit(f"s_lshr_b32 s{dst}, s{sa}, {d.bit_length() - 1}")
+                else:
+                    self.emit(f"s_and_b32 s{dst}, s{sa}, {d - 1}")
             elif op not in m:
                 raise CompileError(f"uniform 不支持 {op}")
             else:
@@ -786,9 +820,12 @@ class CodeGen:
               "s16": "global_load_ushort", "u8": "global_load_ubyte",
               "s8": "global_load_sbyte"}[et]
         self.emit(f"{mn} v{r}, v[{lo}:{hi}], off")
-        self.emit("s_waitcnt vmcnt(0)")
         self.free_addr_pair()
-        return Val("v", r, et)
+        # 延迟等待：先不排空，等第一次真正用到这条值时再 `s_waitcnt vmcnt(0)`。
+        # 同一个语句里连着发的几条 load 因此可以同时在飞（访存并行度）。
+        v = Val("v", r, et, pending=True)
+        self.pending_vals.append(v)
+        return v
 
     def store(self, node: ast.Subscript, value: Val) -> None:
         if not isinstance(node.value, ast.Name):
@@ -818,6 +855,7 @@ class CodeGen:
         self.live_temps.clear()
         self.free_temps.clear()
         self.new_temps.clear()
+        self.pending_vals.clear()
 
     def _stmt(self, node) -> None:
         if isinstance(node, ast.Assign):

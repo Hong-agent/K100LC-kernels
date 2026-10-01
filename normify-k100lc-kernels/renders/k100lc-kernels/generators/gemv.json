@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.gemv",
+  "updated_at": "2026-10-01T15:08:25.393Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "从最简单的 f32 GEMV 出发，逐步到访存合并版、int8 版、W4A4 双行快路，最后是覆盖 11 类编码的原生解码点积框架。",
+    "en": "Start from the simplest f32 GEMV, then the coalesced, int8 and two-row W4A4 variants, and finally the native decode-and-dot framework covering 11 codecs."
+  },
+  "order": [
+    "k100lc-kernels.generators.gemv.f32",
+    "k100lc-kernels.generators.gemv.f32-warp",
+    "k100lc-kernels.generators.gemv.i8",
+    "k100lc-kernels.generators.gemv.w4a4-r2",
+    "k100lc-kernels.generators.gemv.qdot"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.runtime",
+  "updated_at": "2026-10-01T15:08:28.458Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "下层 hsa_rt 直接对接 /opt/hyhal 的 HSA 运行时，上层 fm_engine 把它包装成稳定的 C ABI。",
+    "en": "The lower layer, hsa_rt, talks to the HSA runtime in /opt/hyhal; the upper layer, fm_engine, wraps it in a stable C ABI."
+  },
+  "order": [
+    "k100lc-kernels.runtime.hsa",
+    "k100lc-kernels.runtime.engine"
+  ]
+}

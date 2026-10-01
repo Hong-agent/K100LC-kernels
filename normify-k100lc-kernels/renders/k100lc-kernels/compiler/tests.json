@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.compiler.tests",
+  "updated_at": "2026-10-01T15:08:32.860Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "示例对账测正确性，动态测试测编译期未知布局下的启动。",
+    "en": "The example reconciliation test covers correctness; the dynamic test covers launching with a compile-time-unknown layout."
+  },
+  "order": [
+    "k100lc-kernels.compiler.tests.examples",
+    "k100lc-kernels.compiler.tests.dynamic"
+  ]
+}

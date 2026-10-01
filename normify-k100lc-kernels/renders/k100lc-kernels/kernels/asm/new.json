@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new",
+  "updated_at": "2026-10-01T15:08:21.288Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "通用算子按职责分组：逐元素 → 归一化 → 归约 → 激活量化 → 位置编码 → KV → SSM/卷积 → head 重排 → K-量化解码。",
+    "en": "General operators grouped by role: element-wise, normalization, reduction, activation quantization, positional encoding, KV, SSM/convolution, head reshuffle, and K-quant decoding."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.elementwise",
+    "k100lc-kernels.kernels.asm.new.norm",
+    "k100lc-kernels.kernels.asm.new.reduction",
+    "k100lc-kernels.kernels.asm.new.quant",
+    "k100lc-kernels.kernels.asm.new.position",
+    "k100lc-kernels.kernels.asm.new.kv",
+    "k100lc-kernels.kernels.asm.new.ssm",
+    "k100lc-kernels.kernels.asm.new.head-io",
+    "k100lc-kernels.kernels.asm.new.gguf-dequant"
+  ],
+  "groups": [
+    {
+      "id": "ew",
+      "title": {
+        "zh": "逐元素",
+        "en": "Element-wise"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.new.elementwise"
+      ]
+    },
+    {
+      "id": "norm",
+      "title": {
+        "zh": "归一化",
+        "en": "Normalization"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.new.norm"
+      ]
+    },
+    {
+      "id": "red",
+      "title": {
+        "zh": "归约",
+        "en": "Reduction"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.new.reduction",
+        "k100lc-kernels.kernels.asm.new.quant"
+      ]
+    },
+    {
+      "id": "seq",
+      "title": {
+        "zh": "序列与位置",
+        "en": "Sequence & Position"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.new.position",
+        "k100lc-kernels.kernels.asm.new.kv",
+        "k100lc-kernels.kernels.asm.new.ssm"
+      ]
+    },
+    {
+      "id": "attn",
+      "title": {
+        "zh": "注意力数据搬运",
+        "en": "Attention Data Movement"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.new.head-io"
+      ]
+    },
+    {
+      "id": "gguf",
+      "title": {
+        "zh": "GGUF K-量化",
+        "en": "GGUF K-Quant"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.new.gguf-dequant"
+      ]
+    }
+  ]
+}

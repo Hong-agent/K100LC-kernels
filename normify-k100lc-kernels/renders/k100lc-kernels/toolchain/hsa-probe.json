@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.toolchain.hsa-probe",
+  "updated_at": "2026-10-01T15:08:34.207Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "单核执行器是最小底座，多核连续执行器在它之上保留跨内核缓冲，实验台把「写→汇编→上卡→回读」串成一键环路。",
+    "en": "The single-kernel runner is the base; the sequence runner keeps buffers alive across kernels; the lab chains write, assemble, run and read back into one loop."
+  },
+  "order": [
+    "k100lc-kernels.toolchain.hsa-probe.job",
+    "k100lc-kernels.toolchain.hsa-probe.sequence",
+    "k100lc-kernels.toolchain.hsa-probe.lab"
+  ]
+}

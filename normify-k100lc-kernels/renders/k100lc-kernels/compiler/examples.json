@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.compiler.examples",
+  "updated_at": "2026-10-01T15:08:32.506Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "先看三个最简算子（vadd/axpy/silu），再看三个 K-量化解码示例，最后是示例运行脚本。",
+    "en": "Read the three minimal operators (vadd/axpy/silu), then the three K-quant decode samples, and finally the example runner."
+  },
+  "order": [
+    "k100lc-kernels.compiler.examples.vadd",
+    "k100lc-kernels.compiler.examples.axpy",
+    "k100lc-kernels.compiler.examples.silu",
+    "k100lc-kernels.compiler.examples.q4k-dequant",
+    "k100lc-kernels.compiler.examples.q5k-dequant",
+    "k100lc-kernels.compiler.examples.q6k-dequant",
+    "k100lc-kernels.compiler.examples.runner"
+  ]
+}

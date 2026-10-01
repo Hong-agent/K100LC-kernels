@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators",
+  "updated_at": "2026-10-01T15:08:25.035Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "按算子族分组：GEMV / GEMM / INT4 / GGUF 解码 / 归一化与激活 / MoE 与采样 / GDN 融合。",
+    "en": "Grouped by operator family: GEMV, GEMM, INT4, GGUF decode, normalization & activation, MoE & sampling, GDN fusion."
+  },
+  "order": [
+    "k100lc-kernels.generators.gemv",
+    "k100lc-kernels.generators.gemm",
+    "k100lc-kernels.generators.int4",
+    "k100lc-kernels.generators.gguf",
+    "k100lc-kernels.generators.norm",
+    "k100lc-kernels.generators.moe",
+    "k100lc-kernels.generators.gdn"
+  ],
+  "groups": [
+    {
+      "id": "gemv",
+      "title": {
+        "zh": "GEMV 家族",
+        "en": "GEMV Family"
+      },
+      "children": [
+        "k100lc-kernels.generators.gemv",
+        "k100lc-kernels.generators.gemm"
+      ]
+    },
+    {
+      "id": "quant",
+      "title": {
+        "zh": "量化权重",
+        "en": "Quantized Weights"
+      },
+      "children": [
+        "k100lc-kernels.generators.int4",
+        "k100lc-kernels.generators.gguf"
+      ]
+    },
+    {
+      "id": "ops",
+      "title": {
+        "zh": "通用算子",
+        "en": "General Operators"
+      },
+      "children": [
+        "k100lc-kernels.generators.norm",
+        "k100lc-kernels.generators.moe",
+        "k100lc-kernels.generators.gdn"
+      ]
+    }
+  ]
+}

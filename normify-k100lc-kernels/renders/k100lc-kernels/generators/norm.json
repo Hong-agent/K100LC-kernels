@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.norm",
+  "updated_at": "2026-10-01T15:08:27.759Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "归一化与激活：LayerNorm、softmax、GELU 门控乘，以及替换慢版的快速激活量化。",
+    "en": "Normalization and activation: LayerNorm, softmax, gated GELU multiply, and the fast activation quantizer replacing the slow one."
+  },
+  "order": [
+    "k100lc-kernels.generators.norm.layernorm",
+    "k100lc-kernels.generators.norm.softmax",
+    "k100lc-kernels.generators.norm.gelu-mul",
+    "k100lc-kernels.generators.norm.quant-fast"
+  ]
+}

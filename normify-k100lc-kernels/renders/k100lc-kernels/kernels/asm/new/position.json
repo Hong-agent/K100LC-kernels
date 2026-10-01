@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.position",
+  "updated_at": "2026-10-01T15:08:22.981Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "先算位置编码（RoPE），再按 token id 取嵌入。",
+    "en": "Position encoding (RoPE) first, then the embedding lookup by token id."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.position.rope",
+    "k100lc-kernels.kernels.asm.new.position.embed"
+  ]
+}

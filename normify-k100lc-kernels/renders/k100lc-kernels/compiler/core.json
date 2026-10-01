@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.compiler.core",
+  "updated_at": "2026-10-01T15:08:32.154Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "编译顺序：类型与注解 → 参数与函数骨架 → 临时寄存器 → 表达式 → 运算与内建 → 指针访存 → 语句降级 → 签名与资源 → 编译入口。",
+    "en": "Compilation order: types and annotations, parameters and prologue, temporary registers, expressions, operators and builtins, pointer access, statement lowering, signature and resources, then the entry point."
+  },
+  "order": [
+    "k100lc-kernels.compiler.core.types",
+    "k100lc-kernels.compiler.core.codegen",
+    "k100lc-kernels.compiler.core.buffers",
+    "k100lc-kernels.compiler.core.params",
+    "k100lc-kernels.compiler.core.expr",
+    "k100lc-kernels.compiler.core.builtins",
+    "k100lc-kernels.compiler.core.memory",
+    "k100lc-kernels.compiler.core.stmt",
+    "k100lc-kernels.compiler.core.signature",
+    "k100lc-kernels.compiler.core.api"
+  ]
+}

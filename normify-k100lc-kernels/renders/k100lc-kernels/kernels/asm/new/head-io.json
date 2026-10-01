@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.new.head-io",
+  "updated_at": "2026-10-01T15:08:23.992Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "先 split_qkv 切出 q/k/v，再用 gather/scatter 在 head 交错与连续布局之间搬运。",
+    "en": "split_qkv cuts out q/k/v first, then gather/scatter move between head-interleaved and contiguous layouts."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.new.head-io.gather-heads",
+    "k100lc-kernels.kernels.asm.new.head-io.scatter-heads",
+    "k100lc-kernels.kernels.asm.new.head-io.split-qkv"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.headers.flash-attn",
+  "updated_at": "2026-10-01T15:08:17.155Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "先读打包格式与分块参数，再看 LDS 列交错与点积辅助，最后按 fa_int4 的装载 → QK/在线 softmax → PV/写回顺序理解主循环。",
+    "en": "Read the packing formats and tiling parameters first, then the LDS swizzle and dot helpers, then follow fa_int4 as staging, QK/online-softmax, and PV/write-back."
+  },
+  "order": [
+    "k100lc-kernels.kernels.headers.flash-attn.tiling",
+    "k100lc-kernels.kernels.headers.flash-attn.swizzle",
+    "k100lc-kernels.kernels.headers.flash-attn.kernel-setup",
+    "k100lc-kernels.kernels.headers.flash-attn.kernel-qk",
+    "k100lc-kernels.kernels.headers.flash-attn.kernel-pv"
+  ]
+}

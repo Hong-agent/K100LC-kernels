@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.generators.moe",
+  "updated_at": "2026-10-01T15:08:28.104Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "MoE 数据流：分桶（gather_rows）→ 专家计算 → 合并，另加 router top-10 与行 top-k 两个选择算子。",
+    "en": "MoE data flow: bucketing (gather_rows), expert compute, combine — plus the router top-10 and row top-k selection operators."
+  },
+  "order": [
+    "k100lc-kernels.generators.moe.route",
+    "k100lc-kernels.generators.moe.combine",
+    "k100lc-kernels.generators.moe.router-top10",
+    "k100lc-kernels.generators.moe.topk"
+  ]
+}

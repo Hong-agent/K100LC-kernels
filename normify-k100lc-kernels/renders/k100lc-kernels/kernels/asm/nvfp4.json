@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.nvfp4",
+  "updated_at": "2026-10-01T15:08:19.889Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "NVFP4 全链路：激活量化 → GEMV（普通/宽，按 M 与 K 拆分）→ 预填充 GEMM。",
+    "en": "The full NVFP4 chain: activation quantization, GEMV (normal/wide, by M and K split), and the prefill GEMM."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.nvfp4.quant",
+    "k100lc-kernels.kernels.asm.nvfp4.gemm",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv-wide",
+    "k100lc-kernels.kernels.asm.nvfp4.gemv"
+  ],
+  "groups": [
+    {
+      "id": "pre",
+      "title": {
+        "zh": "激活量化",
+        "en": "Activation Quant"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.nvfp4.quant"
+      ]
+    },
+    {
+      "id": "gemv",
+      "title": {
+        "zh": "GEMV",
+        "en": "GEMV"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.nvfp4.gemv",
+        "k100lc-kernels.kernels.asm.nvfp4.gemv-wide"
+      ]
+    },
+    {
+      "id": "gemm",
+      "title": {
+        "zh": "GEMM",
+        "en": "GEMM"
+      },
+      "children": [
+        "k100lc-kernels.kernels.asm.nvfp4.gemm"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.gemv.w4a4",
+  "updated_at": "2026-10-01T15:08:19.197Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "按 M（激活行数）组织的四个模板实例，M 越大同一次权重读取被复用得越多。",
+    "en": "Four template instances by M (activation rows); larger M reuses each weight read more."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.gemv.w4a4.m1",
+    "k100lc-kernels.kernels.asm.gemv.w4a4.m2",
+    "k100lc-kernels.kernels.asm.gemv.w4a4.m3",
+    "k100lc-kernels.kernels.asm.gemv.w4a4.m4"
+  ]
+}

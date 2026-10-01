@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.python.quant",
+  "updated_at": "2026-10-01T15:08:31.145Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "主机侧权重工具：bf16 位操作 → INT4 打包/解包 → checkpoint 布局转换。",
+    "en": "Host-side weight utilities: bf16 bit operations, INT4 pack/unpack, then checkpoint layout conversion."
+  },
+  "order": [
+    "k100lc-kernels.python.quant.bf16",
+    "k100lc-kernels.python.quant.int4-pack",
+    "k100lc-kernels.python.quant.ct-bridge"
+  ]
+}

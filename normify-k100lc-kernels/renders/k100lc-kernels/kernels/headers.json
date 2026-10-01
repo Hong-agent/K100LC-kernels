@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.headers",
+  "updated_at": "2026-10-01T15:08:16.824Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "每个头文件对应一组内核：先看分块/量化参数，再看设备端点积与参考实现。",
+    "en": "Each header pairs with one kernel family: read the tiling/quantization parameters first, then the device dot helpers and the reference implementation."
+  },
+  "order": [
+    "k100lc-kernels.kernels.headers.flash-attn",
+    "k100lc-kernels.kernels.headers.gemm",
+    "k100lc-kernels.kernels.headers.gemv-w4a4",
+    "k100lc-kernels.kernels.headers.gemv-w4a8",
+    "k100lc-kernels.kernels.headers.kv-pack"
+  ]
+}

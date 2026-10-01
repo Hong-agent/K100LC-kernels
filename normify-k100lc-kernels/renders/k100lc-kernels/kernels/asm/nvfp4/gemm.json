@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.nvfp4.gemm",
+  "updated_at": "2026-10-01T15:08:20.253Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "标准对齐版与放宽对齐要求的 ng 版。",
+    "en": "The standard aligned version and the ng variant with relaxed alignment."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.nvfp4.gemm.m128",
+    "k100lc-kernels.kernels.asm.nvfp4.gemm.ng"
+  ]
+}

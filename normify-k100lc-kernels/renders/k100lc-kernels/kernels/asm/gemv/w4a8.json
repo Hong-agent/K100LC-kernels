@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "k100lc-kernels.kernels.asm.gemv.w4a8",
+  "updated_at": "2026-10-01T15:08:19.550Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "按 M 组织的 W4A8 实例，每个含激活对齐/非对齐两个变体。",
+    "en": "W4A8 instances grouped by M, each with aligned and unaligned activation variants."
+  },
+  "order": [
+    "k100lc-kernels.kernels.asm.gemv.w4a8.m1",
+    "k100lc-kernels.kernels.asm.gemv.w4a8.m2",
+    "k100lc-kernels.kernels.asm.gemv.w4a8.m3",
+    "k100lc-kernels.kernels.asm.gemv.w4a8.m4"
+  ]
+}
