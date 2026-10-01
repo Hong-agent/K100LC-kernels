@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.2
+
+NVFP4 通路（27 个内核，本包最大的一族）的入口语义查清并纳入对账。
+
+### 新增（自检覆盖）
+
+用探针把 NVFP4 的格式逼出来，再用主机参考逐位/逐项对账：
+
+| 内核 | 语义 | 结果 |
+|---|---|---|
+| `nvfp4_quant_act` | 块 = 16，`s = amax/127`（amax=0 时取 1），码 = `clamp(rint(x/s), -128, 127)` 的 **int8**；`a`/`b` 是偶/奇下标两条 int8 流 | **逐位一致** |
+| `nvfp4_gemv<1,1>` / `<2,2>` / `nvfp4_gemv_wide<1,1>` | `y[n] = gscale · Σ_k E2M1(w)·E4M3(ws[n,k/16])·(q_act[k]·asc[k/16])`；权重 8 个 4bit 码/u32、低半字节 = 更小的 k；`ws` 是 E4M3 块尺度 | 相对误差 ~2e-7 |
+
+参考实现写在 `tools/selftest_all.py` 里（`e2m1_decode` / `e4m3_decode` /
+`nvfp4_quant_ref` / `pack_nvfp4_codes`），`E4M3` 按 OCP FP8 解码
+（1 符号 + 4 指数偏置 7 + 3 尾数）。用例总数 55 → 59。
+
+### 待办
+
+`nvfp4_gemm_kernel`（预填充变体）的 grid 约定还没对上：M=128/N=64/K=512 时
+按 `(M/128)×(N/64)` 猜的 grid 算出 rel=1.0，还需要原项目文档或更多探针。
+
 ## 1.7.1
 
 编译器内建扩充，顺带修掉 `max`/`min` 对整数的静默错算。

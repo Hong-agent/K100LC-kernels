@@ -876,7 +876,107 @@ def t_quant_act(ctx: Ctx):
 
 
 # ---------------------------------------------------------------------------
-# I. 序列 / 卷积 / 视觉塔的小算子
+# I. NVFP4（权重 E2M1 + E4M3 块尺度 + f32 全局尺度；激活 int8）
+# ---------------------------------------------------------------------------
+E2M1 = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=np.float32)
+
+
+def e2m1_decode(codes: np.ndarray) -> np.ndarray:
+    """4bit E2M1 码 → f32（bit3 是符号，低 3 位查表）。"""
+    c = np.asarray(codes, dtype=np.uint8) & 0xF
+    v = E2M1[(c & 7).astype(np.int64)]
+    return np.where(c & 8, -v, v).astype(np.float32)
+
+
+def e4m3_decode(bits: np.ndarray) -> np.ndarray:
+    """E4M3（OCP FP8）→ f32；1 符号 + 4 指数（偏置 7）+ 3 尾数。"""
+    b = np.asarray(bits, dtype=np.uint8).astype(np.int64)
+    s, e, m = (b >> 7) & 1, (b >> 3) & 0xF, b & 7
+    val = np.where(e == 0, (m / 8.0) * 2.0 ** -6, (1.0 + m / 8.0) * 2.0 ** (e - 7))
+    return np.where(s == 1, -val, val).astype(np.float32)
+
+
+def pack_nvfp4_codes(codes: np.ndarray) -> np.ndarray:
+    """(N,K) 的 4bit 码 → (N,K/8) u32，低半字节 = 更小的 k。"""
+    n, k = codes.shape
+    out = np.zeros((n, k // 8), dtype=np.uint32)
+    for j in range(8):
+        out |= (codes[:, j::8].astype(np.uint32) & 0xF) << np.uint32(4 * j)
+    return out
+
+
+def nvfp4_quant_ref(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """`nvfp4_quant_act` 的主机参考：块=16，`s = amax/127`，码夹到 [-128,127]。
+
+    输出 `(a, b, scale)`：a/b 是偶/奇下标的 int8 码（与 `quant_act` 同约定）。
+    """
+    m, k = x.shape
+    xb = x.reshape(m, k // 16, 16)
+    amax = np.abs(xb).max(axis=2)
+    s = np.where(amax > 0, amax / np.float32(127.0), np.float32(1.0)).astype(np.float32)
+    q = np.clip(np.rint(xb / s[:, :, None]), -128, 127).astype(np.int8).reshape(m, k)
+    return q[:, 0::2], q[:, 1::2], s.reshape(m, -1)
+
+
+def unpack_nvfp4_codes(wq: np.ndarray, k: int) -> np.ndarray:
+    """(N,K/8) u32 → (N,K) 的 4bit 码。"""
+    n = wq.shape[0]
+    out = np.empty((n, k), dtype=np.uint8)
+    for j in range(8):
+        out[:, j::8] = ((wq >> np.uint32(4 * j)) & np.uint32(0xF)).astype(np.uint8)
+    return out
+
+
+@case("nvfp4", "nvfp4_quant_act")
+def t_nvfp4_quant(ctx: Ctx):
+    k = 5120
+    rng = np.random.default_rng(90)
+    x = (rng.standard_normal((1, k)).astype(np.float32) * 3)
+    qa, qb, s = nvfp4_quant_ref(x)
+    pa = ctx.out(k // 2, np.int8)
+    pb = ctx.out(k // 2, np.int8)
+    ps = ctx.out(k // 16)
+    ctx.launch("nvfp4_quant_act", k // 16, 64, [ctx.buf(x), pa, pb, ps, 1, k])
+    ok = (np.array_equal(ctx.get(pa, k // 2, np.int8), qa.reshape(-1))
+          and np.array_equal(ctx.get(pb, k // 2, np.int8), qb.reshape(-1))
+          and np.array_equal(ctx.get(ps, k // 16).view(np.uint32),
+                             s.reshape(-1).view(np.uint32)))
+    return judge(0.0 if ok else 1.0, np.zeros(1), atol=0.0, rtol=0.0)
+
+
+def _nvfp4_gemv_case(kernel: str, n: int, k: int, seed: int, m_rows: int = 4):
+    def run(ctx: Ctx):
+        rng = np.random.default_rng(seed)
+        codes = rng.integers(0, 16, size=(n, k)).astype(np.uint8)
+        wq = pack_nvfp4_codes(codes)
+        ws = rng.integers(1, 0x7F, size=(n, k // 16)).astype(np.uint8)   # 避开 NaN
+        x = rng.standard_normal((1, k)).astype(np.float32) * 2
+        qa, qb, s = nvfp4_quant_ref(x)
+        gscale = float(np.float32(0.75))
+        pwq, pws = ctx.buf(wq), ctx.buf(ws)
+        pa, pb, psc = ctx.buf(qa.reshape(-1)), ctx.buf(qb.reshape(-1)), ctx.buf(s.reshape(-1))
+        py = ctx.out(n)
+        ctx.launch(kernel, (n + m_rows - 1) // m_rows, 256,
+                   [pwq, pws, pa, pb, psc, py, n, k, gscale])
+        act = np.empty((1, k), dtype=np.int32)
+        act[0, 0::2] = qa
+        act[0, 1::2] = qb
+        wv = e2m1_decode(unpack_nvfp4_codes(wq, k))
+        wsc = e4m3_decode(ws)[:, np.repeat(np.arange(k // 16), 16)]
+        av = act.astype(np.float32) * s[:, np.repeat(np.arange(k // 16), 16)]
+        ref = ((wv * wsc) @ av.T * gscale).reshape(-1)
+        return judge(np.abs(ctx.get(py, n) - ref).max(), ref)
+    run.__name__ = f"t_{kernel}"
+    return run
+
+
+case("nvfp4", "nvfp4_gemv<1,1>")(_nvfp4_gemv_case("nvfp4_gemv<1,1>", 32, 512, 91, 4))
+case("nvfp4", "nvfp4_gemv<2,2>")(_nvfp4_gemv_case("nvfp4_gemv<2,2>", 32, 512, 92, 4))
+case("nvfp4", "nvfp4_gemv_wide<1,1>")(_nvfp4_gemv_case("nvfp4_gemv_wide<1,1>", 32, 512, 93, 4))
+
+
+# ---------------------------------------------------------------------------
+# J. 序列 / 卷积 / 视觉塔的小算子
 # ---------------------------------------------------------------------------
 @case("seq", "split_qkv_k")
 def t_split_qkv(ctx: Ctx):

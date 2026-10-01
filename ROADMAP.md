@@ -43,7 +43,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
 | B1 | 全内核性能基线 | 部分完成 | `tools/bench_decode.py` 已覆盖解码全通路；还缺 attention / norm / MoE 等族的吞吐基线 |
-| B2 | 预填充 INT4 GEMM | 待办（已量化） | `N=17408 K=5120` 实测：**M=128 20.2、M=256 30.7、M=512 38.1、M=1024 41.8 TMAC/s**（峰值 78）。大 M 稳定在 ~54%，小 M 掉到 26%——原因是 grid = `(N/64)×(M/128)`：M=128 只有 **272 个 workgroup**（120 CU 才 2.27 个/CU），要 ~1000 个才饱和。候选：① 权重按 K 对半预切（加载时一次），跑两次半 K 的 GEMM 再用 `add_inplace_k` 合并 → 并行度翻倍，代价是多一次 M*N 的读写（128 行时约 45 us）；② 换更小的 BN（需要改内核） |
+| B2 | 预填充 INT4 GEMM | 待办（需改内核） | `N=17408 K=5120` 实测：**M=128 20.2、M=256 30.7、M=512、38.1、M=1024 41.8 TMAC/s**（峰值 78）。大 M 稳定 ~54%，小 M 掉到 26%。原因：grid 只按 `(M/128)×(N/64)` 切，M=128 时**只有 272 个 workgroup**（120 CU 才 2.27 个/CU），延迟掩盖不住。**已否掉一个错误方案**：按 K 对半拆成两次 GEMM 并不能提高并行度（grid 与 K 无关），必须上 **split-K 内核**（部分和 + reduce）或把 BM 从 128 改小——两者都要改那个 500+ 行的手写 GEMM |
 | B3 | 解码注意力（长上下文） | 待办 | `fa_decode_k` / `fa_decode_rows_k` 的 KV 访存与 GQA 复用 |
 | B4 | 融合算子 | 待办 | RMSNorm+量化、rope+KV 写入、split_qkv+norm（后者已有 `k_gdn_split_norm_k`）等 |
 | B5 | MoE 专家并行度 | 待办 | 分桶路径已有 2.71×；继续做专家内并行 / 权重常驻 |
@@ -54,7 +54,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| C1 | 自检覆盖其余内核 | 进行中 | 已覆盖 55 个（W4 解码全通路 + 激活量化 4 件套 + `split_qkv_k`）；待补：Attention/KV（18 个，全部无用例、语义要从汇编逆向）、ViT、序列/卷积、NVFP4（27 个）、`quant_rows_a8_k`、`rope_k`。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据，padding 约定要先定下来才敢写用例；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
+| C1 | 自检覆盖其余内核 | 进行中 | 已覆盖 59 个（W4 解码全通路 + 激活量化 4 件套 + `split_qkv_k` + **NVFP4 入口 4 个**）；待补：Attention/KV（18 个，全部无用例、语义要从汇编逆向）、ViT、序列/卷积、NVFP4 其余 23 个（含 `nvfp4_gemm_kernel`，grid 约定未定）、`quant_rows_a8_k`、`rope_k`。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据，padding 约定要先定下来才敢写用例；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
 | C2 | 新量化格式 | 待办 | Q3_K / Q2_K / MXFP4 / FP8 等的 `*_dot_k` |
 | C3 | 采样算子 | 待办 | top-p / repetition penalty 等目前只有主机侧 numpy |
 | C4 | `concat2_k` 语义澄清 | 已完成 | 实测是「按 `pre` 分块交替交织」，已写进 `docs/KERNEL_CALLING.md`；如需真拼接要另加内核 |
