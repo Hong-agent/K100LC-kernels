@@ -56,7 +56,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
 | C1 | 自检覆盖其余内核 | 进行中 | **全包约 84/122**：W4 解码全通路、激活量化 4 件套、`split_qkv_k`、NVFP4 25/27（`nvfp4_quant_act` + 24 个 gemv 模板变体）、ViT 4/7（`vit_bias`/`vit_bias_s`/`vit_gelu`/`vit_ln`）。待补：Attention/KV（18 个，全部无用例、语义要从汇编逆向）、ViT 的 `vit_rope_kernel`/`vit_linear_f16_kernel`/`vit_attn_kernel`、序列/卷积、NVFP4 的 2 个预填充 GEMM（grid 约定未定）、`quant_rows_a8_k`、`rope_k`。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
-| C5 | `vit_bias_s_kernel` 的 period 缺陷 | 待办 | `i % period` 用范围有限的魔法除法：只有 `period == dim` 可靠，其它周期在 `n` 稍大后从某个下标起算错（`dim=16` 时 period=2/3 从 24、4 从 48、8 从 96 起错）。修它要改那段手写汇编 |
+| C5 | `vit_bias_s_kernel` 的第 5 个参数 | 待办（语义未查清） | 只有 `X == dim` 是干净的「按列加 bias」；X=16 时只在 `i%16 < dim` 的位置写；X=2/3/4 前 `X*dim` 个元素像 `b[i%X]` 之后就变；X=1/24 只有前 dim 个像 `b[i]`。要按列加 bias 直接用 `vit_bias_kernel`，别用这个 |
 | C6 | `concat2_k` 的参数语义 | 已完成（更正） | 不是缺陷：第 5 个参数 `n` 是**半长**，内核写 `2n` 个元素；按 `n` 给输出会写穿到相邻缓冲，表现为「同参数复跑结果不同」。用例已按 2n 完整对账，README 与 `KERNEL_CALLING.md` 都补了说明 |
 | C2 | 新量化格式 | 待办 | Q3_K / Q2_K / MXFP4 / FP8 等的 `*_dot_k` |
 | C3 | 采样算子 | 待办 | top-p / repetition penalty 等目前只有主机侧 numpy |

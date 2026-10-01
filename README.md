@@ -232,8 +232,8 @@ python3 compiler/tests/test_examples.py
   需要二维并行时优先使用 1D 扁平块号内核（例如 `gemm_w4a4_flat`）。
 * 只支持 `/opt/hyhal` 的 HSA 运行时。
 
-* `vit_bias_s_kernel` 实测**只在 `period == dim` 时正确**（其它周期用到了
-  范围有限的内部魔法除法，从某个下标起算错）。详见 `CHANGELOG.md` 1.7.3。
+* `vit_bias_s_kernel` 的第 5 个参数**只有等于 `dim` 时**是「按列加 bias」
+  （其它取值的输出模式没查清）；要按列加 bias 直接用 `vit_bias_kernel`。
 * `concat2_k(y, a, b, pre, n)` 的第 5 个参数是**半长**：它会写 **2n** 个
   元素，输出缓冲必须给 `2n`（按 `n` 给会写穿到相邻缓冲）。
 

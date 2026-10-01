@@ -1017,10 +1017,11 @@ def t_vit_bias(ctx: Ctx):
 def t_vit_bias_s(ctx: Ctx):
     """`y[i] += b[i % period]`；参数 `(y, b, n, dim, period)`。
 
-    **只在 `period == dim` 时可靠**：实测 `dim=16, n=256`、period 取
-    2/4/8 时分别从下标 24/48/96 起开始算错（`i % period` 用的是范围有限的
-    魔法除法），period=3/5 同样错、period=16（=dim）全对。所以用例只覆盖
-    `period == dim` 这个可靠用法，缺陷记在 ROADMAP。
+    第 5 个参数**只有等于 `dim` 时**是干净的「按列加 bias」。实测
+    （`dim=8`、`b=[1..8]`）：X=8 时 `b[i%8]` 全程正确；X=16 时只在
+    `i%16 < 8` 的位置写；X=2/3/4 前 `X*dim` 个像 `b[i%X]` 之后就变模式；
+    X=1/24 只有前 8 个像 `b[i]`。其它取值的语义没查清，用例只覆盖
+    `X == dim`。要按列加 bias 建议直接用 `vit_bias_kernel`。
     """
     n, dim, period = 512, 64, 64
     rng = np.random.default_rng(111)
