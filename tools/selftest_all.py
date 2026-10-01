@@ -853,6 +853,32 @@ def t_quant_act(ctx: Ctx):
 
 
 # ---------------------------------------------------------------------------
+# I. 序列 / 卷积 / 视觉塔的小算子
+# ---------------------------------------------------------------------------
+@case("seq", "split_qkv_k")
+def t_split_qkv(ctx: Ctx):
+    """把一个 token 的 `[qn + kn + vn]` 行拆成 q / k / v 三段。
+
+    实测语义（探针确认）：源码行距 = `qn + kn + vn`；
+    `q[t*qn+i] = x[t*row+i]`、`k[t*kn+i] = x[t*row+qn+i]`、
+    `v[t*vn+i] = x[t*row+qn+kn+i]`；grid = T，wg = 64。
+    """
+    T, qn, kn, vn = 5, 4, 2, 3
+    rng = np.random.default_rng(80)
+    x = rng.standard_normal(T * (qn + kn + vn)).astype(np.float32)
+    pq, pk, pv = ctx.out(T * qn), ctx.out(T * kn), ctx.out(T * vn)
+    ctx.launch("split_qkv_k", T, 64, [pq, pk, pv, ctx.buf(x), T, qn, kn, vn])
+    xt = x.reshape(T, qn + kn + vn)
+    ref_q = xt[:, :qn].reshape(-1)
+    ref_k = xt[:, qn:qn + kn].reshape(-1)
+    ref_v = xt[:, qn + kn:].reshape(-1)
+    got = np.concatenate([ctx.get(pq, T * qn), ctx.get(pk, T * kn),
+                          ctx.get(pv, T * vn)])
+    ref = np.concatenate([ref_q, ref_k, ref_v])
+    return judge(np.abs(got - ref).max(), ref, atol=0.0, rtol=0.0)
+
+
+# ---------------------------------------------------------------------------
 # 运行器
 # ---------------------------------------------------------------------------
 def main() -> int:

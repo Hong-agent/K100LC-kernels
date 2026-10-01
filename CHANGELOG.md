@@ -36,6 +36,11 @@
 - `bash tools/check_all.sh` 全绿；`tools/bench_decode.py` 的 GGUF 组加入
   `q6k_dot_k`。
 
+### 新增
+
+- 自检新增 **seq** 组：`split_qkv_k`（把 `[qn+kn+vn]` 的一行拆成 q/k/v）。
+  语义用探针实测确认后写进用例，可以整行逐位对账；用例总数 53 → 54。
+
 ## 1.6.4
 
 编译器：整数比较又查出 8 个运算符编不过，顺带补上 2 的幂常量除/取模。

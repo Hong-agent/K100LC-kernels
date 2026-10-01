@@ -54,7 +54,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| C1 | 自检覆盖其余内核 | 进行中 | 已覆盖 53 个（W4 解码全通路 + 激活量化 3 件套）；待补：Attention/KV、ViT、序列/卷积、NVFP4、`quant_rows_k`/`quant_rows_a8_k`、`rope_k`、`embed_k`、`split_qkv_k` |
+| C1 | 自检覆盖其余内核 | 进行中 | 已覆盖 54 个（W4 解码全通路 + 激活量化 3 件套 + `split_qkv_k`）；待补：Attention/KV、ViT、序列/卷积（`conv1d_silu_k`/`conv_state_update_k`/`ssm_ab_gate_k`/`embed_k`）、NVFP4、`quant_rows_k`/`quant_rows_a8_k`、`rope_k` |
 | C2 | 新量化格式 | 待办 | Q3_K / Q2_K / MXFP4 / FP8 等的 `*_dot_k` |
 | C3 | 采样算子 | 待办 | top-p / repetition penalty 等目前只有主机侧 numpy |
 | C4 | `concat2_k` 语义澄清 | 已完成 | 实测是「按 `pre` 分块交替交织」，已写进 `docs/KERNEL_CALLING.md`；如需真拼接要另加内核 |
@@ -68,7 +68,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 | D3 | varying `if/else` | 已完成 | v1.6.2 用 exec 掩码实现（v1.6.3 修掉嵌套时 else 被跳过）；顺带修掉「f32 比较全都编不过」与 `^` 没接线 |
 | D4 | 新内建 | 进行中 | 已补 `min`（用 `-max(-a,-b)`）；运算符补了 `^`、整数比较全表、2 的幂常量 `/` `%`；后续按需加 `floor/trunc/rndne` 等 |
 | D5 | 编译器自检 | 部分完成 | 已有 10 项（vadd/silu/axpy/loop/many_vars/long_expr/f32-比较/varying-ifelse/DSL 特性扫描/整数比较与除模）+ 动态启动；仍缺「生成 vs 参考」的批量回归集 |
-| D6 | 后端正确性扫描 | 进行中 | 「拿文档当规格逐项对账」这个方法很有效：连查出 f32 比较全挂、整数比较 8 个运算符挂、`^` 没接线、嵌套 varying if/else 算错。剩余待扫：`u8/u16` 指针边界、`break/continue` 嵌套、多内核单文件、`while`（不支持）等 |
+| D6 | 后端正确性扫描 | 已完成 | 「拿文档当规格逐项对账」这个方法连查出四类问题：f32 比较全挂、整数比较 8 个运算符挂、`^` 没接线、嵌套 varying if/else 算错。已扫完并固化：一元负号、`& \| ^ << >>`、增强赋值（含 `%=` 等）、两种 `range`、嵌套 for + break 只跳内层、uniform/varying if-else、多内核单文件、`u8/u16` 指针、`load16`/`s8`/`f16_to_f32`、f32/int 比较全表、2 的幂除模；不支持的特性（`and/or`、`while`、`return`、指针赋值、链式比较、一般除数）都给出明确报错 |
 
 ### E. 工程质量
 
