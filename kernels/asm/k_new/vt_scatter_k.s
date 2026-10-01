@@ -48,14 +48,14 @@ v_mov_b32_e32 v14, s18
 v_mov_b32_e32 v15, s19
 v_add_co_u32_e32 v14, vcc, v14, v64
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
-global_load_dword v65, v[14:15], off
+global_load_dword v64, v[14:15], off
 s_waitcnt vmcnt(0)
 s_mov_b32 s78, 65
 s_mul_i32 s79, s33, s78
-v_mov_b32_e32 v64, s79
-v_add_u32_e32 v66, v64, v3
-v_lshlrev_b32_e32 v64, 2, v66
-ds_write_b32 v64, v65 offset:0
+v_mov_b32_e32 v66, s79
+v_add_u32_e32 v67, v66, v3
+v_lshlrev_b32_e32 v66, 2, v67
+ds_write_b32 v66, v64 offset:0
 if_end_4:
 for_inc_2:
 s_add_i32 s33, s33, 1

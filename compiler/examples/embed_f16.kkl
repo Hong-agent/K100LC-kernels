@@ -1,0 +1,21 @@
+# 词表查表（token embedding）：`y[r, d] = f32(table[ids[r], d])`，表是 **f16**。
+#
+# 包里的 `embed_k`（LLVM 生成）签名是 `(float*, u32 const*, u16 const*, int const*,
+# int, int)`，但它的 lane↔行映射和多出来的那个 `int const*` 参数一直没逆向清楚
+# （探针里只写出了一行、还是 0）。模型这条路上真正需要的语义很简单，所以照仓库
+# 一贯做法（和 `rope_apply_k` 一样）自己写一颗、对账到逐位相同：
+#
+#   grid = rows（一个 workgroup 一行），lane 分摊 dim 个元素
+#   ids[r] 是 u32 词表下标（uniform 读，全 lane 同值）
+#   load16 + f16_to_f32 是 DSL 自带内建
+def embed_f16_k(y: ptr[f32], ids: ptr[u32], tab: ptr[u16], rows: u32, dim: u32):
+    r = bid()
+    l = lane()
+    if r < rows:
+        e = ids[r]
+        base = e * dim
+        nit = (dim + 63) >> 6
+        for i in range(0, nit):
+            c = (i << 6) + l
+            if c < dim:
+                y[r * dim + c] = f16_to_f32(load16(tab, (base + c) << 1))

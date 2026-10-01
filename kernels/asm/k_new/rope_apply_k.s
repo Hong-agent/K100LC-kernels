@@ -49,9 +49,9 @@ v_mov_b32_e32 v14, s20
 v_mov_b32_e32 v15, s21
 v_add_co_u32_e32 v14, vcc, v14, v64
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
-global_load_dword v65, v[14:15], off
+global_load_dword v64, v[14:15], off
 s_waitcnt vmcnt(0)
-v_mov_b32_e32 v9, v65
+v_mov_b32_e32 v9, v64
 s_mul_i32 s75, s31, s30
 v_mov_b32_e32 v64, s75
 v_add_u32_e32 v65, v64, v8
@@ -60,9 +60,9 @@ v_mov_b32_e32 v14, s22
 v_mov_b32_e32 v15, s23
 v_add_co_u32_e32 v14, vcc, v14, v64
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
-global_load_dword v65, v[14:15], off
+global_load_dword v64, v[14:15], off
 s_waitcnt vmcnt(0)
-v_mov_b32_e32 v10, v65
+v_mov_b32_e32 v10, v64
 s_mul_i32 s76, s29, s25
 v_mov_b32_e32 v64, s76
 v_add_u32_e32 v65, v64, v8
@@ -71,9 +71,9 @@ v_mov_b32_e32 v14, s18
 v_mov_b32_e32 v15, s19
 v_add_co_u32_e32 v14, vcc, v14, v64
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
-global_load_dword v65, v[14:15], off
+global_load_dword v64, v[14:15], off
 s_waitcnt vmcnt(0)
-v_mov_b32_e32 v11, v65
+v_mov_b32_e32 v11, v64
 s_mul_i32 s77, s29, s25
 v_mov_b32_e32 v64, s77
 v_add_u32_e32 v65, v64, v8
@@ -84,9 +84,9 @@ v_mov_b32_e32 v14, s18
 v_mov_b32_e32 v15, s19
 v_add_co_u32_e32 v14, vcc, v14, v64
 v_addc_co_u32_e32 v15, vcc, v15, v1, vcc
-global_load_dword v66, v[14:15], off
+global_load_dword v64, v[14:15], off
 s_waitcnt vmcnt(0)
-v_mov_b32_e32 v12, v66
+v_mov_b32_e32 v12, v64
 v_mul_f32_e32 v64, v11, v9
 v_mul_f32_e32 v65, v12, v10
 v_sub_f32_e32 v66, v64, v65

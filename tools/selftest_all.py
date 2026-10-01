@@ -1249,6 +1249,26 @@ def t_gemv_f32_rows8_split(ctx: Ctx):
     return judge(np.abs(got - ref).max(), ref)
 
 
+@case("seq", "embed_f16_k")
+def t_embed_f16(ctx: Ctx):
+    """词表查表（token embedding）：`y[r, d] = f32(table[ids[r], d])`，表是 f16。
+
+    `(y, ids, table, rows, dim)`；grid = rows（一个 workgroup 一行）。包里的
+    `embed_k` 是 LLVM 生成的、lane↔行映射与第 4 个 `int const*` 参数没逆向
+    清楚，所以这条路上用的是自己用编译器写的 `embed_f16_k`（逐位对账）。
+    """
+    rows, dim, vocab = 7, 128, 32
+    rng = np.random.default_rng(190)
+    tab = rng.standard_normal((vocab, dim)).astype(np.float16)
+    ids = rng.integers(0, vocab, rows).astype(np.uint32)
+    py = ctx.out(rows * dim)
+    ctx.launch("embed_f16_k", rows, 64,
+               [py, ctx.buf(ids), ctx.buf(tab.view(np.uint8)), rows, dim])
+    ref = tab[ids].astype(np.float32)
+    return judge(np.abs(ctx.get(py, rows * dim).reshape(rows, dim) - ref).max(),
+                 ref)
+
+
 @case("seq", "rope_apply_k")
 def t_rope_apply(ctx: Ctx):
     """RoPE（rotate-half）：`y[j] = a*c - b*s`、`y[j+half] = a*s + b*c`。

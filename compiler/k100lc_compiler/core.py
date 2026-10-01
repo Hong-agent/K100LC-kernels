@@ -981,7 +981,13 @@ class CodeGen:
         self.emit(f"v_add_co_u32_e32 v{lo}, vcc, v{lo}, v{off}")
         self.emit(f"v_addc_co_u32_e32 v{hi}, vcc, v{hi}, v{self.zero_v}, vcc")
         self.free_tmp_v(off)
-        self._release(index)
+        # 注意：这里**不能**再 `_release(index)` —— 调用方（load/store/load16）
+        # 自己会释放它。两边都释放就是「释放两次」：第二次释放时那个寄存器
+        # 往往已经被重新分配出去、又处在存活集合里，于是被错误地放回池子，
+        # 后面算地址时就复用了它、把还在用的值覆盖掉（实测 `embed_f16_k` 里
+        # `v_cvt_f32_f16_e32 v66, v66` 之后 v66 又被当地址临时值用掉，
+        # 存进去的是整数而不是转换后的浮点）。语句结束会整体清空临时池，
+        # 所以这里不释放也不会把寄存器用光。
         return lo, hi
 
     def load(self, node: ast.Subscript) -> Val:

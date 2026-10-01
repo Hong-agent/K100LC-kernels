@@ -676,6 +676,11 @@ rt.launch("flash_dec_part_k", n_heads * nsplit, 64,
 rt.launch("flash_dec_comb_k", n_heads, 64, [pout, po, pm, pl, dh, nsplit, inv])
 #   运行时封装见 `k100lc_kernels.model.FlashAttention`（含 K/V 缓存与 append）
 
+# 词表查表（token embedding）：y[r, d] = f32(table[ids[r], d])，表是 f16
+#   grid = rows（一个 workgroup 一行）；包里 LLVM 生成的 embed_k 语义未逆向清楚，
+#   模型这条路用自己用编译器写的这颗（逐位对账）
+rt.launch("embed_f16_k", rows, 64, [py, pids, ptab, rows, dim])
+
 # RoPE（rotate-half）：y[j]=a*c-b*s、y[j+half]=a*s+b*c，a/b 是 x 的前后半。
 #   cos/sin 形状 [rows, half]（每个位置一套表），grid = rows，wg = 64
 rt.launch("rope_apply_k", rows, 64, [py, px, pcos, psin, rows, dim, tsh, tbase])

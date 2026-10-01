@@ -948,6 +948,45 @@ def check_spill(out_dir: pathlib.Path) -> None:
           f"rel={rel:.1e}）ok")
 
 
+def check_embed(out_dir: pathlib.Path) -> None:
+    """回归：`compiler/examples/embed_f16.kkl`（词表查表）+ 一类**寄存器释放**bug。
+
+    v1.9.5 之前 `_addr()` 自己会释放调用方传进来的下标值，调用方（`load`/
+    `store`/`load16`）又释放一次 —— 第二次释放时那个寄存器往往已经被重新分配、
+    又处在存活集合里，于是被错误地放回池子；后面同一个语句里算地址时复用它，
+    就把还在用的值覆盖掉。症状是**静默算错**（实测 `embed_f16_k` 里
+    `v_cvt_f32_f16_e32 v66, v66` 之后 v66 又被当地址临时值用掉，存进去的是
+    整数位模式而不是转换后的浮点数）。已发布内核里也藏着同一个模式
+    （`q4k_dequant` 等有 `v_cvt v65, v65`），只是值恰好马上被用掉才没出错。
+
+    这个用例专门覆盖「一条语句里 store 的地址 + 载入值 + 转换」这条最长的链。
+    """
+    h = compile_file(ROOT / "compiler/examples/embed_f16.kkl", out_dir,
+                     "embed_f16_k")[0]
+    asm_text = (out_dir / "embed_f16_k.s").read_text()
+    for line in asm_text.splitlines():
+        if line.startswith("v_cvt_f32_f16_e32"):
+            dst, src = [t.strip() for t in line.split()[1:3]]
+            assert dst != src, f"转换指令自己覆盖自己（寄存器被重复释放）：{line}"
+    for rows, dim, vocab in ((1, 64, 16), (7, 128, 32), (33, 96, 50)):
+        rng = np.random.default_rng(rows * 7 + dim)
+        tab = rng.standard_normal((vocab, dim)).astype(np.float16)
+        ids = rng.integers(0, vocab, rows).astype(np.uint32)
+        o = run_one(h, "embed_f16_k",
+                    [{"buffer": "y"}, {"buffer": "ids"}, {"buffer": "tab"},
+                     {"scalar": {"dtype": "u32", "value": rows}},
+                     {"scalar": {"dtype": "u32", "value": dim}}],
+                    {"y": {"dtype": "f32", "values": [0.0] * (rows * dim)},
+                     "ids": {"dtype": "u32", "values": ids.tolist()},
+                     "tab": {"dtype": "u8",
+                             "values": list(tab.view(np.uint8).tobytes())}},
+                    grid=rows * 64, workgroup=64)
+        got = np.array(o["y"], np.float32).reshape(rows, dim)
+        ref = tab[ids].astype(np.float32)
+        assert np.array_equal(got, ref), f"embed rows={rows} dim={dim} 不一致"
+    print("词表查表（embed_f16_k，3 组尺寸）+ 寄存器重复释放回归 ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -968,6 +1007,7 @@ def main() -> int:
     check_lds(out)
     check_rope(out)
     check_spill(out)
+    check_embed(out)
     return 0
 
 

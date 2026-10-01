@@ -30,9 +30,9 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ushort v65, v[24:25], off
+global_load_ushort v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_cvt_f32_f16_e32 v65, v65
+v_cvt_f32_f16_e32 v65, v64
 v_mov_b32_e32 v5, v65
 s_mov_b32 s65, 2
 s_mov_b32 s21, 0
@@ -62,9 +62,9 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ubyte v66, v[24:25], off
+global_load_ubyte v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_mov_b32_e32 v9, v66
+v_mov_b32_e32 v9, v64
 s_mov_b32 s71, 64
 s_mul_i32 s72, s21, s71
 v_mov_b32_e32 v64, s72
@@ -78,9 +78,9 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ubyte v65, v[24:25], off
+global_load_ubyte v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_mov_b32_e32 v10, v65
+v_mov_b32_e32 v10, v64
 v_mov_b32_e32 v64, 128
 v_add_u32_e32 v65, v3, v64
 s_mov_b32 s73, 32
@@ -94,9 +94,9 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ubyte v65, v[24:25], off
+global_load_ubyte v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_mov_b32_e32 v11, v65
+v_mov_b32_e32 v11, v64
 v_mov_b32_e32 v64, 15
 v_and_b32_e32 v65, v9, v64
 v_mov_b32_e32 v64, 3
@@ -155,11 +155,11 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ubyte v66, v[24:25], off
+global_load_ubyte v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_lshlrev_b32_e32 v64, 24, v66
-v_ashrrev_i32_e32 v64, 24, v64
-v_mov_b32_e32 v17, v64
+v_lshlrev_b32_e32 v65, 24, v64
+v_ashrrev_i32_e32 v65, 24, v65
+v_mov_b32_e32 v17, v65
 v_mov_b32_e32 v64, s23
 v_add_u32_e32 v65, v7, v64
 v_mov_b32_e32 v64, 2
@@ -169,11 +169,11 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ubyte v66, v[24:25], off
+global_load_ubyte v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_lshlrev_b32_e32 v64, 24, v66
-v_ashrrev_i32_e32 v64, 24, v64
-v_mov_b32_e32 v18, v64
+v_lshlrev_b32_e32 v65, 24, v64
+v_ashrrev_i32_e32 v65, 24, v65
+v_mov_b32_e32 v18, v65
 v_mov_b32_e32 v64, s23
 v_add_u32_e32 v65, v7, v64
 v_mov_b32_e32 v64, 4
@@ -183,11 +183,11 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ubyte v66, v[24:25], off
+global_load_ubyte v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_lshlrev_b32_e32 v64, 24, v66
-v_ashrrev_i32_e32 v64, 24, v64
-v_mov_b32_e32 v19, v64
+v_lshlrev_b32_e32 v65, 24, v64
+v_ashrrev_i32_e32 v65, 24, v65
+v_mov_b32_e32 v19, v65
 v_mov_b32_e32 v64, s23
 v_add_u32_e32 v65, v7, v64
 v_mov_b32_e32 v64, 6
@@ -197,11 +197,11 @@ v_mov_b32_e32 v24, s16
 v_mov_b32_e32 v25, s17
 v_add_co_u32_e32 v24, vcc, v24, v64
 v_addc_co_u32_e32 v25, vcc, v25, v1, vcc
-global_load_ubyte v66, v[24:25], off
+global_load_ubyte v64, v[24:25], off
 s_waitcnt vmcnt(0)
-v_lshlrev_b32_e32 v64, 24, v66
-v_ashrrev_i32_e32 v64, 24, v64
-v_mov_b32_e32 v20, v64
+v_lshlrev_b32_e32 v65, 24, v64
+v_ashrrev_i32_e32 v65, 24, v65
+v_mov_b32_e32 v20, v65
 s_mov_b32 s77, 128
 s_mul_i32 s78, s21, s77
 v_mov_b32_e32 v64, s78
