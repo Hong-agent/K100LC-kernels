@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.7.9
+
+系统性的**尺寸扫描**（新工具），并据此查出 `split_qkv_k` 的真实尺寸限制。
+
+### 新增
+
+- `tools/size_sweep.py`：把「按固定尺寸对过账」的内核换一批尺寸再跑一遍。
+  起因是这张卡上**已经出现过两次尺寸相关的坑**（`concat2_k` 的参数是半长、
+  `vit_bias_s_kernel` 的周期参数），而 `selftest_all.py` 每个内核只跑一组
+  尺寸。扫描覆盖逐元素（n=1/63/64/65/…/16384）、归一化与 softmax（dim/cols
+  扫描，含 `softmax_vec_k`）、GEMV/归约（(n,k) 与 nbpr 扫描）、MoE/top-k/router
+  （含历史上出过问题的 `moe_combine` dim=2048）、序列/视觉塔。
+
+### 查出限制：`split_qkv_k` 的行不能超过 64 个元素
+
+实测（`T=1`）：
+
+| `qn+kn+vn` | 9 | 32 | 64 | 80 | 144 | 384 |
+|---|---:|---:|---:|---:|---:|---:|
+| 错的元素数 | 0 | 0 | **0** | 16 | 80 | 320 |
+
+误差数恒为 `row - 64`：一个 lane 一个元素、没有行内循环，超出 64 的部分
+**静默算错**（不报错）。`T` 再大（测到 65）都没问题。已写进
+`docs/KERNEL_CALLING.md` 与 `tools/size_sweep.py` 的说明，用例只覆盖合规尺寸。
+
+### 其它（都没问题，属"验证过的负结果"）
+
+`vit_bias_kernel`（dim 到 512）、`l2norm_k`（n 到 5120）、`argmax_k`（n 到
+16384）、`silu_mul_k`（n 到 16384）、`softmax_k`/`softmax_vec_k`（cols 到
+16384）、`rmsnorm_k`（dim 到 5120）、`gemv_f32_warp_k`（n=1..3000）、
+`reduce_blocks_k`（nbpr=1..17）、`moe_combine_k`（dim 到 5120）、
+`gather_rows_k`、`topk_k`、`router_top10_k`、`vit_ln_kernel`、`vit_gelu_kernel`
+—— 在扫描过的尺寸上全部一致。
+
+### 验证
+
+- `python3 tools/size_sweep.py`：全部通过。
+- `bash tools/check_all.sh`：把尺寸扫描也串进去了。
+
 ## 1.7.8
 
 向量化 softmax（第 124 个内核），解码注意力再快 1.5~1.6 倍。

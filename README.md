@@ -151,6 +151,7 @@ MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简�
 |---|---|
 | `tools/check_all.sh` | **一条命令跑完全部验证**：重建 → 产物一致性（防止改了生成器忘重建/忘提交）→ 全内核对账 → 编译器回归 → 模型级端到端。`--quick` 跳过重建 |
 | `tools/selftest_all.py` | **发货产物**（`prebuilt/` 那份 HSACO）的全内核对账基线：61 个用例覆盖约 84/122 个内核（逐元素 / 归一化 / softmax / top-k / router / MoE / GEMV / 11 类 GGUF 解码 / 融合点积 / RT4 W4A4·W4A8 / 激活量化 / NVFP4 25 个 / ViT 4 个 / `split_qkv_k`），支持 `--group`、`--only`、`--json`、`--repeat`（查非确定性） |
+| `tools/size_sweep.py` | **尺寸扫描**：把对过账的内核换一批尺寸再跑一遍（这张卡上出过两次尺寸相关的坑）。已查出的限制：`split_qkv_k` 行必须 ≤ 64 |
 | `tools/bench_decode.py` | 解码（M=1..4）每条权重通路的 us/层 与 GB/s |
 | `tools/bench_model_paths.py` | f32 / W4A16 / W4A8 / W4A4 / 预填充 GEMM 五路对比 |
 | `tools/bench_moe.py` | 稠密全专家 vs 分桶 |

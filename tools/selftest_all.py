@@ -1115,6 +1115,10 @@ def t_split_qkv(ctx: Ctx):
     实测语义（探针确认）：源码行距 = `qn + kn + vn`；
     `q[t*qn+i] = x[t*row+i]`、`k[t*kn+i] = x[t*row+qn+i]`、
     `v[t*vn+i] = x[t*row+qn+kn+i]`；grid = T，wg = 64。
+
+    **限制：`qn+kn+vn` 必须 ≤ 64**（一个 lane 一个元素、没有行内循环）。
+    超出不报错、只是静默算错（实测 row=80 时最后 16 个元素错，误差数恒为
+    `row-64`）；`tools/size_sweep.py` 会打印这条已知限制。
     """
     T, qn, kn, vn = 5, 4, 2, 3
     rng = np.random.default_rng(80)

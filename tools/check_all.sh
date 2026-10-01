@@ -57,6 +57,14 @@ else
     python3 tools/selftest_all.py 2>&1 | grep -E "^FAIL" | head -20
 fi
 
+step "3b/5 尺寸扫描（同一个内核换一批尺寸再对一遍）"
+if python3 tools/size_sweep.py > /tmp/k100lc_sweep.log 2>&1; then
+    ok "$(tail -1 /tmp/k100lc_sweep.log)"
+else
+    bad "尺寸扫描有失败项"
+    grep -E "^   " /tmp/k100lc_sweep.log | head -20
+fi
+
 step "4/5 编译器回归"
 if python3 compiler/tests/test_examples.py > /tmp/k100lc_cc.log 2>&1; then
     ok "$(tail -1 /tmp/k100lc_cc.log)"
