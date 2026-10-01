@@ -1462,6 +1462,23 @@ def t_split_qkv(ctx: Ctx):
     return judge(np.abs(got - ref).max(), ref, atol=0.0, rtol=0.0)
 
 
+@case("seq", "runtime_hsaco_guard")
+def t_hsaco_guard(ctx: Ctx):
+    """`hsa_rt` 一个进程只装一份 HSACO（`hsart_init` 里 `static bool done`）。
+
+    第二次用**别的路径**开 `Runtime` 必须报错——否则会静默继续用第一份内核表，
+    基准/对账都会量到错的核而不自知（v1.9.7 就是被这个坑过一次）。
+    """
+    other = ROOT / "build" / "native_kernels.hsaco"
+    if not other.is_file():
+        return judge(0.0, np.zeros(1))
+    try:
+        Runtime(hsaco=other)
+    except RuntimeError:
+        return judge(0.0, np.zeros(1))
+    return judge(1.0, np.zeros(1))
+
+
 # ---------------------------------------------------------------------------
 # 运行器
 # ---------------------------------------------------------------------------

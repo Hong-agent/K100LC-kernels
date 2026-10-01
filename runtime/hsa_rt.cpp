@@ -594,6 +594,7 @@ int hsart_launch_batch(const uint64_t* plan, int nrec) {
     std::lock_guard<std::mutex> lk(g_mtx);
     uint64_t widx = hsa_queue_load_write_index_relaxed(g_queue);
     int done = 0;
+    int chunk = 0;
     const uint64_t* p = plan;
     for (int r = 0; r < nrec; r++) {
         const uint64_t id = *p++;
@@ -625,8 +626,15 @@ int hsart_launch_batch(const uint64_t* plan, int nrec) {
                          k->group_size, k->private_size, &widx))
             break;
         done++;
+        // kernarg 只有 N_SLOT 个槽：填满一段就得先把门铃敲了，否则下一条
+        // `packet_fill` 会去等「同一个槽的上一次」——而那次还在**本批**里、
+        // 门铃没敲、GPU 根本看不到它 → 死锁（v1.9.7 之前一次投 >64 条就挂住）。
+        if (++chunk >= N_SLOT) {
+            packet_publish(widx);
+            chunk = 0;
+        }
     }
-    if (done > 0) packet_publish(widx);   // 只敲一次门铃
+    if (chunk > 0) packet_publish(widx);   // 不满一段的尾巴
     return done;
 }
 

@@ -27,22 +27,29 @@ import numpy as np
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-from k100lc_kernels import Runtime  # noqa: E402
+from k100lc_kernels import LaunchPlan, Runtime  # noqa: E402
 from k100lc_kernels.model import FlashAttention, cdiv  # noqa: E402
 
 
 class Timer:
+    """用 `LaunchPlan` 重放计时。
+
+    逐条 `rt.launch` 会把主机侧打包 + ctypes 调用（每条 ~8~16 us）算进去，
+    而且两个内核分开量时谁也盖不住谁的「收尾」开销；重放同一批调用能把这段
+    挤掉，量到的就是 GPU 侧。`units` 是这批调用相当于几个「单位」（比如
+    part+comb 两条 = 1 个 token）。"""
+
     def __init__(self, rt: Runtime, iters: int):
         self.rt, self.iters = rt, iters
 
-    def __call__(self, fn) -> float:
-        fn()
+    def __call__(self, calls: list, units: int = 1) -> float:
+        plan = LaunchPlan(self.rt, list(calls) * self.iters)
+        plan.run()
         self.rt.sync()
         t0 = time.perf_counter()
-        for _ in range(self.iters):
-            fn()
+        plan.run()
         self.rt.sync()
-        return (time.perf_counter() - t0) / self.iters * 1e6
+        return (time.perf_counter() - t0) / self.iters / units * 1e6
 
 
 def bench_comb(rt: Runtime, nh: int, dh: int, splits: list[int], iters: int) -> None:
@@ -59,8 +66,8 @@ def bench_comb(rt: Runtime, nh: int, dh: int, splits: list[int], iters: int) -> 
     print(f"comb  n_heads={nh} dh={dh} grid={nh} workgroup=64")
     print(f"{'nsplit':>7} {'us':>9} {'us/head':>9} {'GB/s(po)':>9}")
     for ns in splits:
-        us = timer(lambda: rt.launch("flash_dec_comb_k", nh, 64,
-                                     [out, po, pm, pl, dh, ns, inv]))
+        us = timer([("flash_dec_comb_k", nh, 64,
+                     [out, po, pm, pl, dh, ns, inv])])
         gb = nh * ns * dh * 4 / (us * 1e-6) / 1e9
         print(f"{ns:7d} {us:9.2f} {us / nh:9.2f} {gb:9.1f}")
     for p in (out, po, pm, pl):
@@ -91,14 +98,14 @@ def bench_forward(rt: Runtime, nh: int, dh: int, ctxs: list[int], iters: int) ->
         pad, nsplit, _R = attn.plan(n_kv)
         cshift = nsplit.bit_length() - 1
         inv = float(np.float32(1.0 / np.sqrt(dh)))
-        t_part = timer(lambda: rt.launch(
-            "flash_dec_part_k", nh * nsplit, 64,
-            [attn.po, attn.pm, attn.pl, attn.q, attn.kt, attn.v, n_kv, dh,
-             pad, attn.max_len, cshift, inv, attn.dim]))
-        t_comb = timer(lambda: rt.launch(
-            "flash_dec_comb_k", nh, 64,
-            [attn.out, attn.po, attn.pm, attn.pl, dh, nsplit, inv]))
-        t_all = timer(lambda: attn.forward_device(attn.q, n_kv=n_kv))
+        part = ("flash_dec_part_k", nh * nsplit, 64,
+                [attn.po, attn.pm, attn.pl, attn.q, attn.kt, attn.v, n_kv, dh,
+                 pad, attn.max_len, cshift, inv, attn.dim])
+        comb = ("flash_dec_comb_k", nh, 64,
+                [attn.out, attn.po, attn.pm, attn.pl, dh, nsplit, inv])
+        t_part = timer([part])
+        t_comb = timer([comb])
+        t_all = timer([part, comb])
         # 每个 token 要读 K + V 两份缓存（f32，每头 dh 宽）
         gb = 2 * n_kv * nh * dh * 4 / (t_all * 1e-6) / 1e9
         print(f"{n_kv:7d} {nsplit:7d} {t_part:9.2f} {t_comb:9.2f} {t_all:9.2f} "

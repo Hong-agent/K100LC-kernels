@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.9.7
+
+**批量投递超过 64 条会死锁——修掉了。** 引擎的 kernarg 只有 `N_SLOT = 64`
+个槽，`packet_fill` 复用某个槽之前要 `hsa_signal_wait` 等它的上一次完成；
+而 `hsart_launch_batch` 是「先把整批包填完、最后才敲一次门铃」。于是第 65 条
+开始就在等一个**还在本批里、门铃没敲、GPU 根本看不到**的包 → 卡死（不是算错，
+是整进程挂住，`UINT64_MAX` 等待）。是这次给 part 内核做批量计时时踩到的
+（`LaunchPlan` 里放 256 条，跑了两分半还没回来）。改法：按 64 条一段投、
+每段单独敲门铃。`examples/python_model_layer.py` 的 `run_batched_launch` 加了
+「100 条一批」的对账用例（正好跨过这个边界）。
+
+**运行时拦掉「一个进程换不了内核包」这个静默坑。** `hsa_rt` 的 `hsart_init()`
+用 `static bool done` 保证一个进程只初始化一次，于是 `Runtime(hsaco=...)`
+第二次换成**别的路径**会被**静默忽略**——内核表还是第一份的。这个坑是这次给
+`flash_dec_part_k` 分相位计时时踩出来的：同一个进程里连开 4 个变体量时间，
+四个数字一模一样、还都「像回事」，差点当成结论（`hsart_init` 里那句
+`if (done) return;` 是唯一线索）。现在 `Runtime.__init__` 记下第一次的路径，
+第二次路径不同就直接 `RuntimeError`（并提示「要换内核包请开新进程」），
+`tools/selftest_all.py` 加 `runtime_hsaco_guard` 用例盯住（自检 79 → 80）。
+
+### 顺带把 `flash_dec_part_k` 的账算清楚了（并入 B3 后续）
+
+拆开量（`n_kv=4096`、`dh=64`、8 头、`nsplit=64`、grid=512）：
+
+| 项 | us |
+| --- | --- |
+| 空内核（同 grid，只走完序言就 `s_endpgm`） | 10.0 |
+| 第一趟 `K·q` + 第二三趟 max/exp/sum | ~29 |
+| 第四趟 `P·V` | ~29 |
+| 其中：去掉 d 循环那条 `vmcnt(0)`（会算错，只计时） | −7.0 |
+| 其中：去掉 j 循环那条 `vmcnt(0)` | −6.5 |
+
+拿本项目最优的读密集内核 `gemv_f32_rows8_k` 当标尺，同尺寸（8.4 MB、
+grid=512）它净传输约 **440 GB/s**（29.0 us 里扣掉同样的 10 us 空转地板 = 19 us
+传 8.4 MB），而 part 内核只有 **~276 GB/s**（58 us 传 16 MB）——还有约 1.6 倍
+结构性余量，方向是「加深每 lane 的在途 load」（d/j 批量 4 → 8）与 K 的跨步
+访问（同一 warp 的 4 条 load 落在 64 个不同的 16 KB 页上）。另外量了带宽随
+grid 的标尺：8.4 MB 时 grid=512 只有 289 GB/s，要到 33.6 MB / 8192 个
+workgroup 才是 670 GB/s——**小尺寸下「多开 workgroup」并不自动更快**。
+
 ## 1.9.6
 
 **`flash_dec_comb_k` 的内层循环不再「每个分块一次访存往返」。** 合并内核原来

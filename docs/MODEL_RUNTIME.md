@@ -301,6 +301,11 @@ plan.run()                       # 一次 ctypes 调用全部入队
 token 录制、之后每 token 只打几个补丁），实测整层 **0.31 → 0.26 ms/token**；
 `examples/python_model_layer.py` 里 `run_batched_launch` 会验证「批量 == 逐条」。
 
+一批最多 **64 条**（引擎只有 64 个 kernarg 槽）：超过就分几段投、每段单独敲门铃。
+v1.9.7 之前一次投 >64 条会**死锁**——填满第 65 条时 `packet_fill` 去等「同一个
+槽的上一次完成」，而那次还在本批里、门铃还没敲、GPU 根本看不见它。现在
+`run_batched_launch` 里额外放了 100 条一批的对账用例盯住这个边界。
+
 ### 5.0 一整层：`TransformerLayer`
 
 ```python
@@ -342,8 +347,9 @@ out_dev = fa.forward_device(q_dev, sync=False)
 两条内核的分项耗时用 `tools/bench_flash_decode.py` 量（`--what part|comb`）。
 v1.9.6 把 `flash_dec_comb_k` 的内层循环按 4 个分块一组展开（组内 12 条 load
 只等一次），nsplit=64 时 85.6 → **31.6 us（2.7 倍）**、nsplit=32 时 44.9 →
-18.0 us；n_kv=2048、dh=64 时整条前向约 62 us，其中 `flash_dec_part_k` 占
-48.8 us——**part 才是下一步的大头**（它是延迟受限的，见 `ROADMAP.md` B3 后续）。
+18.0 us；n_kv=2048、dh=64 时整条前向约 55 us，其中 `flash_dec_part_k` 占
+35 us——**part 才是下一步的大头**（它离本卡同尺寸读带宽还有约 1.6 倍，见
+`ROADMAP.md` B3 后续）。
 
 ```python
 # 要求：R = pad >> log2(nsplit) 是 64 的倍数，且 R ≤ 4096（LDS 16 KB + 256）
@@ -452,6 +458,10 @@ sync）；只在最外层输入 token / 取 logits 时用一次。
   语义构造合法输入的参考实现；参数猜错会 fault。
 * 2D grid 的 y 维第二个 workgroup 写入不可靠；用 1D 拆行或 flat 内核。
 * `KVCache` 是 f32 主机编排版；打包 KV 请用 `kv_append_*` 内核。
+* **一个进程只能加载一份 HSACO**：`hsa_rt` 的 `hsart_init()` 里有
+  `static bool done`，第二次 `Runtime(hsaco=...)` 换成别的路径会被静默忽略
+  （内核表还是第一份的）。v1.9.7 起这种调用会直接 `RuntimeError`；要换内核包
+  请开新进程，或先用环境变量 `RT_HSACO` 指定。
 
 ## 9. 验证
 

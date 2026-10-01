@@ -269,7 +269,8 @@ def run_batched_launch(rt: Runtime, rng) -> None:
     a = rt.alloc(n * 4)
     b = rt.alloc(n * 4)
     c = rt.alloc(n * 4)
-    rt.upload(a, rng.standard_normal(n).astype(np.float32))
+    a_host = rng.standard_normal(n).astype(np.float32)
+    rt.upload(a, a_host)
     rt.upload(b, rng.standard_normal(n).astype(np.float32))
     grid = -(-n // 64)
     rt.memset(c, 0, n * 4)          # 基线也要先清零（add_inplace_k 是累加）
@@ -290,6 +291,17 @@ def run_batched_launch(rt: Runtime, rng) -> None:
     plan.run()
     rt.sync()
     ok_plan = bool(np.array_equal(seq, rt.download(c, n, np.float32)))
+    # 一批超过引擎的 kernarg 槽数（N_SLOT=64）时也不能卡死：v1.9.7 之前
+    # `hsart_launch_batch` 填满 64 个包就去等「同一个槽的上一次完成」，而那一次
+    # 还在本批里、门铃没敲 → 死锁。100 条正好跨过这个边界。
+    rt.memset(c, 0, n * 4)
+    big = LaunchPlan(rt, [("add_inplace_k", grid, 64, [c, a, n])] * 100)
+    big.run()
+    rt.sync()
+    ref_big = np.zeros(n, np.float32)
+    for _ in range(100):                       # 按内核的累加顺序逐次加，便于逐位比
+        ref_big = (ref_big + a_host).astype(np.float32)
+    ok_big = bool(np.array_equal(ref_big, rt.download(c, n, np.float32)))
 
     def bench(fn, it=300):
         fn(); rt.sync()
@@ -305,10 +317,11 @@ def run_batched_launch(rt: Runtime, rng) -> None:
 
     t_seq = bench(seq_launch)
     t_bat = bench(lambda: plan.run())
-    if not (ok_seq and ok_plan):
+    if not (ok_seq and ok_plan and ok_big):
         FAILURES.append("batched launch 与逐条结果不一致")
     print(f"[batch] 4 次 launch：逐条 {t_seq:.1f} us → plan 重放 {t_bat:.1f} us "
-          f"（结果一致 {ok_seq and ok_plan}）")
+          f"（结果一致 {ok_seq and ok_plan}）；100 条一批（跨 N_SLOT=64）"
+          f"结果一致 {ok_big}")
     rt.free(a); rt.free(b); rt.free(c)
 
 

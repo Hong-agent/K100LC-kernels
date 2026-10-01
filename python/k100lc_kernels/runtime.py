@@ -103,6 +103,26 @@ class LaunchPlan:
         return got
 
 
+# `hsa_rt` 的 `hsart_init()` 用 `static bool done` 保证「一个进程只初始化一次」，
+# 于是**第二份 HSACO 会被静默忽略**（内核表还是第一份的）。实测踩过这个坑：在一个
+# 进程里连开两个 `Runtime(hsaco=...)` 量变体，第二个之后测的全是第一个的内核，
+# 数字看着合理却是错的。这里显式拦下来。
+_INIT_HSACO: pathlib.Path | None = None
+
+
+def _note_hsaco(hsaco) -> None:
+    global _INIT_HSACO
+    want = pathlib.Path(hsaco)
+    if _INIT_HSACO is None:
+        _INIT_HSACO = want
+    elif _INIT_HSACO.resolve() != want.resolve():
+        raise RuntimeError(
+            f"本进程已经用 {_INIT_HSACO} 初始化过 HSA 引擎；`hsa_rt` 的内核表一个"
+            f"进程只装一次，再加载 {want} 会被静默忽略（实测踩过：多个变体放在同一"
+            f"个进程里基准，结果全在量第一份内核）。要换内核包请开新进程；想让环境"
+            f"变量优先，就设 `RT_HSACO`。")
+
+
 class Runtime:
     """常驻 HSA 引擎：显存缓冲只分配一次，反复 launch。"""
 
@@ -143,6 +163,7 @@ class Runtime:
             ctypes.POINTER(ctypes.c_uint64), ctypes.c_int]
         if lib.fm_init(str(hsaco).encode()) != 0:
             raise RuntimeError(f"fm_init 失败: {hsaco}")
+        _note_hsaco(hsaco)
         self.hsaco = pathlib.Path(hsaco)
         self.catalog = self._load_catalog(catalog)
         # 每次 launch 的固定开销优化：缓存编码后的内核名，复用 argv 缓冲
