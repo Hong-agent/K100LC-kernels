@@ -214,6 +214,82 @@ def vsel(x: ptr[f32], y: ptr[f32], n: u32):
     print(f"varying if/else + min/max ok (max_abs={d:.3e})")
 
 
+def check_dsl_surface(out_dir: pathlib.Path) -> None:
+    """把文档里写的 DSL 特性扫一遍（v1.6.3 就是这么发现 `^` 没接线、
+    嵌套 varying if/else 算错的）。"""
+    cases = [
+        ("一元负号 + 位运算 & | ^ >>",
+         """
+def dsl(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        a = u32(x[i])
+        b = (a & 7) | ((a >> 1) ^ 3)
+        y[i] = f32(b) + (-1.0)
+""",
+         np.array([0, 1, 2, 3, 4, 5, 6, 7], np.float32),
+         lambda a: ((a.astype(np.uint32) & 7)
+                    | ((a.astype(np.uint32) >> 1) ^ 3)).astype(np.float32) - 1.0),
+        ("嵌套 varying if/else",
+         """
+def dsl(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        if x[i] > 0.0:
+            if x[i] > 2.0:
+                y[i] = 2.0
+            else:
+                y[i] = 1.0
+        else:
+            y[i] = -1.0
+""",
+         np.array([-3, -1, 0, 0.5, 1, 2, 3, 5], np.float32),
+         lambda a: np.where(a > 0, np.where(a > 2, 2.0, 1.0), -1.0)),
+        ("增强赋值 += -= *= /=",
+         """
+def dsl(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        v = x[i]
+        v += 1.0
+        v *= 3.0
+        v -= 0.5
+        v /= 2.0
+        y[i] = v
+""",
+         np.array([-2, -1, 0, 1, 2], np.float32),
+         lambda a: ((a + 1.0) * 3.0 - 0.5) / 2.0),
+        ("for range 两种写法 + break/continue 之外的全量走一遍",
+         """
+def dsl(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        v = x[i]
+        for j in range(1, 4):
+            v = v * 2.0
+        for k in range(0, 2):
+            v = v + 1.0
+        y[i] = v
+""",
+         np.array([0, 1, 2], np.float32),
+         lambda a: (a * 8.0) + 2.0),
+    ]
+    for title, src, x, ref_fn in cases:
+        n = len(x)
+        h = compile_source(src, out_dir, "dsl")[0]
+        o = run_one(h, "dsl",
+                    [{"buffer": "x"}, {"buffer": "y"},
+                     {"scalar": {"dtype": "u32", "value": n}}],
+                    {"x": {"dtype": "f32", "values": list(map(float, x))},
+                     "y": {"dtype": "f32", "values": [0.0] * n}},
+                    grid=n, workgroup=64)
+        got = np.array(o["y"], np.float32)
+        ref = np.asarray(ref_fn(x), np.float32)
+        d = float(np.abs(got - ref).max())
+        assert d < 1e-4, f"{title}: max_abs={d}"
+    print(f"DSL 特性扫描（{len(cases)} 项）ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -224,6 +300,7 @@ def main() -> int:
     check_long_expr(out)
     check_f32_cmp(out)
     check_varying_else(out)
+    check_dsl_surface(out)
     return 0
 
 

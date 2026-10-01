@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.3
+
+编译器：DSL 特性扫描（拿文档当规格逐项对账）又查出两处。
+
+### 修复
+
+- **嵌套 varying `if/else` 算错**（上一条刚加的 else 支持有 bug）。当时的写法
+  在「有任一 lane 满足 then」时用 `s_branch` 跳过了 else——同一个 wave 里
+  不满足条件的 lane 就什么都没执行（实测 `x=[0.5]` 该得 1.0 却得 0）。
+  现在两条路径都跑、各自用 exec 掩码，并且**条件另存一对 SGPR**：
+  then 里的地址计算会用 `vcc` 做进位输出，直接依赖 vcc 一定会被冲掉。
+- **`^`（异或）没有接线**：`binop` 里早就有 `v_xor_b32_e32`，但
+  `expr()` 的运算符映射漏了 `ast.BitXor`，所以文档写着支持、实际
+  `不支持的运算符 BitXor`。
+
+### 新增
+
+- `compiler/tests/test_examples.py::check_dsl_surface`：把文档里写的 DSL
+  特性（一元负号、`& | ^ >>`、增强赋值、两种 `range` 写法和嵌套 varying
+  if/else）逐项与 NumPy 对账。这一次的两处问题就是它扫出来的。
+
+### 验证
+
+- `compiler/tests/test_examples.py` 9 项全过；`bash tools/check_all.sh` 全绿。
+
 ## 1.6.2
 
 编译器：f32 比较本来就是坏的（编不过）、varying `if/else`、`min`。

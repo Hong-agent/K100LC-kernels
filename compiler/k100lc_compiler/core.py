@@ -377,7 +377,7 @@ class CodeGen:
             a, b = self.expr(node.left), self.expr(node.right)
             op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
                   ast.LShift: "<<", ast.RShift: ">>",
-                  ast.BitAnd: "&", ast.BitOr: "|"}.get(type(node.op))
+                  ast.BitAnd: "&", ast.BitOr: "|", ast.BitXor: "^"}.get(type(node.op))
             if op is None:
                 raise CompileError(f"不支持的运算符 {type(node.op).__name__}")
             ty = "f32" if ("f32" in (a.ty, b.ty) and op in ("+", "-", "*", "/")) else \
@@ -811,20 +811,22 @@ class CodeGen:
                 self.label(end)
                 self.save_s -= 2
                 return
-            # varying if/else：把 exec 分别掩成 (old & cond) 与 (old & ~cond)
-            # 两段执行；vcc 在两段之间不会被写（body 1 那条路径直接跳到 restore）
+            # varying if/else：把 exec 分别掩成 (old & cond) 与 (old & ~cond)，
+            # 两条路径**都要跑**（同一个 wave 里两类 lane 都可能存在），所以不能
+            # 用 s_branch 跳过 else。条件本身要另存一对 SGPR：then 里的地址计算
+            # 会用 vcc 做进位输出，直接依赖 vcc 会在 else 之前被冲掉。
+            cond_s = self._alloc_tmp_s(2)
             els = self.new_label("if_else")
-            restore = self.new_label("if_restore")
+            self.emit(f"s_mov_b64 s[{cond_s}:{cond_s + 1}], vcc")
             self.emit(f"s_and_saveexec_b64 s[{save}:{save + 1}], vcc")
             self.emit(f"s_cbranch_execz {els}")
             for st in node.body:
                 self.stmt(st)
-            self.emit(f"s_branch {restore}")
             self.label(els)
-            self.emit(f"s_andn2_b64 exec, s[{save}:{save + 1}], vcc")
+            self.emit(f"s_mov_b64 exec, s[{save}:{save + 1}]")
+            self.emit(f"s_andn2_b64 exec, exec, s[{cond_s}:{cond_s + 1}]")
             for st in node.orelse:
                 self.stmt(st)
-            self.label(restore)
             self.emit(f"s_mov_b64 exec, s[{save}:{save + 1}]")
             self.label(end)
             self.save_s -= 2
