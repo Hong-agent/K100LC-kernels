@@ -695,38 +695,49 @@ def _gen_q6k_dot_asm() -> str:
         em("v_ashrrev_i32_e32 v36, 24, v36")
         em("v_cvt_f32_i32_e32 v36, v36")
         em(f"v_mul_f32_e32 v{128 + n}, v8, v36")
+    # 每次处理两个 l0（相差 4）：两个 l0 的量化字节与激活**一起**发出去、
+    # 只等一次。原来每个 l0 一条 `s_waitcnt vmcnt(0)`（整块 16 次全排空）。
+    # 寄存器：量化字节 20..25，激活 dwordx4 用 96..111（l0）与 112..127（l0+4）。
     for half in range(2):
-        for l0 in range(0, 32, 4):
+        for l0 in range(0, 32, 8):
             sb = half * 8 + l0 // 16
-            em(f"global_load_dword v20, v[4:5], off offset:{half * 64 + l0}")
-            em(f"global_load_dword v21, v[4:5], off offset:{half * 64 + 32 + l0}")
-            em(f"global_load_dword v22, v[4:5], off offset:{128 + half * 32 + l0}")
-            for base in (0, 32, 64, 96):
-                em(f"global_load_dwordx4 v[{96 + base // 8}:{99 + base // 8}], "
-                   f"v[6:7], off offset:{4 * (half * 128 + base + l0)}")
+            for di, doff in enumerate((0, 4)):
+                dq = 20 + 3 * di
+                em(f"global_load_dword v{dq}, v[4:5], off "
+                   f"offset:{half * 64 + l0 + doff}")
+                em(f"global_load_dword v{dq + 1}, v[4:5], off "
+                   f"offset:{half * 64 + 32 + l0 + doff}")
+                em(f"global_load_dword v{dq + 2}, v[4:5], off "
+                   f"offset:{128 + half * 32 + l0 + doff}")
+                for bi, base in enumerate((0, 32, 64, 96)):
+                    xr = 96 + 16 * di + 4 * bi
+                    em(f"global_load_dwordx4 v[{xr}:{xr + 3}], v[6:7], off "
+                       f"offset:{4 * (half * 128 + base + l0 + doff)}")
             em("s_waitcnt vmcnt(0)")
-            for si, (dreg, hi, base, qs) in enumerate(
-                    (("v20", 0, 0, 0), ("v21", 0, 32, 2),
-                     ("v20", 1, 64, 4), ("v21", 1, 96, 6))):
-                xb = 96 + base // 8
-                for j in range(4):
-                    em(f"v_lshrrev_b32_e32 v36, {8 * j}, {dreg}")
-                    em("v_and_b32_e32 v36, 0xff, v36")
-                    if hi == 0:
-                        em("v_and_b32_e32 v36, 0xf, v36")
-                    else:
-                        em("v_lshrrev_b32_e32 v36, 4, v36")
-                    em(f"v_lshrrev_b32_e32 v37, {8 * j}, v22")
-                    em("v_and_b32_e32 v37, 0xff, v37")
-                    if qs:
-                        em(f"v_lshrrev_b32_e32 v37, {qs}, v37")
-                    em("v_and_b32_e32 v37, 3, v37")
-                    em("v_lshlrev_b32_e32 v37, 4, v37")
-                    em("v_or_b32_e32 v36, v36, v37")
-                    em("v_cvt_f32_u32_e32 v36, v36")
-                    em("v_add_f32_e32 v36, v47, v36")
-                    em(f"v_mul_f32_e32 v36, v{128 + sb + 2 * si}, v36")
-                    em(f"v_fma_f32 v{DOT_ACC[j]}, v36, v{xb + j}, v{DOT_ACC[j]}")
+            for di in range(2):
+                d0, d1, d2 = 20 + 3 * di, 21 + 3 * di, 22 + 3 * di
+                for si, (dreg, hi, qs) in enumerate(
+                        ((d0, 0, 0), (d1, 0, 2), (d0, 1, 4), (d1, 1, 6))):
+                    xb = 96 + 16 * di + 4 * si
+                    for j in range(4):
+                        em(f"v_lshrrev_b32_e32 v36, {8 * j}, v{dreg}")
+                        em("v_and_b32_e32 v36, 0xff, v36")
+                        if hi == 0:
+                            em("v_and_b32_e32 v36, 0xf, v36")
+                        else:
+                            em("v_lshrrev_b32_e32 v36, 4, v36")
+                        em(f"v_lshrrev_b32_e32 v37, {8 * j}, v{d2}")
+                        em("v_and_b32_e32 v37, 0xff, v37")
+                        if qs:
+                            em(f"v_lshrrev_b32_e32 v37, {qs}, v37")
+                        em("v_and_b32_e32 v37, 3, v37")
+                        em("v_lshlrev_b32_e32 v37, 4, v37")
+                        em("v_or_b32_e32 v36, v36, v37")
+                        em("v_cvt_f32_u32_e32 v36, v36")
+                        em("v_add_f32_e32 v36, v47, v36")
+                        em(f"v_mul_f32_e32 v36, v{128 + sb + 2 * si}, v36")
+                        em(f"v_fma_f32 v{DOT_ACC[j]}, v36, v{xb + j}, "
+                           f"v{DOT_ACC[j]}")
     dot_tail(L)
     return "\n".join(L) + "\n"
 

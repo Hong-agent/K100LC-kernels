@@ -203,7 +203,8 @@ def main() -> int:
     if "gguf" in want:
         print("[GGUF 原生点积]")
         for kind, qk, bb, kernel in (("iq4nl", 32, 18, "iq4nl_dot_k"),
-                                     ("q4k", 256, 144, "q4k_dot_k")):
+                                     ("q4k", 256, 144, "q4k_dot_k"),
+                                     ("q6k", 256, 210, "q6k_dot_k")):
             nbpr = k // qk
             if nbpr == 0 or (n * nbpr) % 64:
                 continue
