@@ -121,6 +121,32 @@ def many(x: ptr[f32], y: ptr[f32], n: u32):
     print(f"many_vars({nvar}) ok (got={got:.1f})")
 
 
+def check_long_expr(out_dir: pathlib.Path) -> None:
+    """回归：语句内临时值必须能复用。
+
+    `tmp_v` 原来是单调递增的——`x[0] + x[1] + … + x[n]` 这种长表达式每个
+    `+` 都占一个新寄存器，60 项就把 v245 用光（其实同时只有 2~3 个是活的）。
+    v1.5.0 加了临时寄存器池：用完即归还。
+    """
+    nterm = 300
+    terms = " + ".join(f"x[{i}]" for i in range(nterm))
+    src = f"""
+def longexpr(x: ptr[f32], y: ptr[f32], n: u32):
+    y[0] = {terms}
+"""
+    h = compile_source(src, out_dir, "longexpr")[0]
+    x = np.arange(2048, dtype=np.float32)
+    o = run_one(h, "longexpr",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": 2048}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * 4}},
+                grid=1, workgroup=64)
+    got, ref = float(o["y"][0]), float(np.sum(x[:nterm]))
+    assert abs(got - ref) <= 1e-6 * max(1.0, abs(ref)), f"{got} != {ref}"
+    print(f"long_expr({nterm} 项) ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -128,6 +154,7 @@ def main() -> int:
     check_axpy(out)
     check_loop(out)
     check_many_vars(out)
+    check_long_expr(out)
     return 0
 
 

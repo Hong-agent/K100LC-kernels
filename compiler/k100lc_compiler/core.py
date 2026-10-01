@@ -90,6 +90,12 @@ class CodeGen:
         self.var_s = 16
         self.tmp_v = 64
         self.tmp_base = 64
+        # 临时寄存器池：`alloc_tmp_v` 优先从 `free_temps` 取，`_release` 在用完
+        # 之后归还。没有这个池的时候临时值是单调递增的——`x[0]+x[1]+…+x[n]`
+        # 这种长表达式 60 项就把 v245 用光了（其实同时只有两三个是活的）。
+        self.live_temps: set[int] = set()
+        self.free_temps: list[int] = []
+        self.new_temps: list[int] = []        # as_vreg 为常量/标量新建的临时
         self.tmp_s = 64
         self.addr_v = 200
         self.save_s = 48
@@ -113,11 +119,15 @@ class CodeGen:
         return f"{prefix}_{self.label_n}"
 
     def alloc_tmp_v(self) -> int:
-        r = self.tmp_v
-        self.tmp_v += 1
-        if self.tmp_v > 245:
-            raise CompileError("VGPR 溢出（v1 不做 spill）")
+        if self.free_temps:
+            r = self.free_temps.pop()
+        else:
+            r = self.tmp_v
+            self.tmp_v += 1
+            if self.tmp_v > 245:
+                raise CompileError("VGPR 溢出（不做 spill）：同时存活的临时值太多")
         self.max_v = max(self.max_v, r)
+        self.live_temps.add(r)
         return r
 
     def _plan_registers(self) -> None:
@@ -167,8 +177,13 @@ class CodeGen:
             r += 1
         self.var_anon = r
         self.var_anon_end = r + anon
-        self.var_v = self.var_anon_end
-        self.tmp_base = max(64, self.var_anon_end)
+        # 地址对（lo/hi）单独占两个连续的寄存器，插在变量区和临时区之间。
+        # 以前写死在 v254/v255，导致**每个**带访存的编译内核都声明 256 个 VGPR
+        # （占用率只有实际需要的 1/3）；现在按实际用量收口。
+        self.addr_lo = self.var_anon_end
+        self.addr_hi = self.var_anon_end + 1
+        self.var_v = self.addr_hi + 1
+        self.tmp_base = max(64, self.addr_hi + 1)
         self.tmp_v = self.tmp_base
         self.max_v = max(self.max_v, self.var_anon_end - 1)
         if self.tmp_base > 200:
@@ -176,15 +191,28 @@ class CodeGen:
                 f"{self.fn.name}: 变量太多，VGPR 变量区已到 v{self.var_anon_end}"
                 f"（上限 v200）")
 
-    def free_tmp_v(self, n: int = 1) -> None:
-        # v1：不做临时寄存器复用，避免结果寄存器被后续表达式覆盖。
-        return
+    def free_tmp_v(self, reg: int) -> None:
+        """归还一个临时寄存器（只有由 `alloc_tmp_v` 真正发出去过的才收）。"""
+        if reg in self.live_temps:
+            self.live_temps.discard(reg)
+            self.free_temps.append(reg)
+
+    def _release(self, *vals) -> None:
+        """一条指令发完之后调用：归还它的操作数临时值，以及 `as_vreg` 为
+        常量/标量新建的临时值。调用方保证这些值没有别的引用。
+        """
+        for v in vals:
+            if v is not None and v.kind == "v" and v.reg is not None:
+                self.free_tmp_v(v.reg)
+        for r in self.new_temps:
+            self.free_tmp_v(r)
+        self.new_temps.clear()
 
     def alloc_addr_pair(self) -> tuple[int, int]:
-        # 所有 load/store 复用同一个高地址对；表达式求值不会同时持有两个地址
+        # 所有 load/store 复用同一个地址对；表达式求值不会同时持有两个地址
         # （前一个 load 的结果已经在临时 VGPR 里）。这样临时寄存器不会撞地址对。
-        self.max_v = max(self.max_v, 255)
-        return 254, 255
+        self.max_v = max(self.max_v, self.addr_hi)
+        return self.addr_lo, self.addr_hi
 
     def free_addr_pair(self) -> None:
         return
@@ -276,6 +304,7 @@ class CodeGen:
         if v.kind == "v":
             return v.reg
         r = self.alloc_tmp_v()
+        self.new_temps.append(r)     # 没有 Val 持有它，用完由 _release 归还
         if v.kind == "s":
             self.emit(f"v_mov_b32_e32 v{r}, s{v.reg}")
         elif v.kind == "lit":
@@ -391,9 +420,10 @@ class CodeGen:
                     self.emit(f"v_rcp_f32_e32 v{t}, v{bv}")
                     self.emit("s_nop 0")       # v_rcp_f32 后接 VALU 读的 hazard
                     self.emit(f"v_mul_f32_e32 v{dst}, v{av}, v{t}")
-                    self.free_tmp_v()
+                    self.free_tmp_v(t)
             else:
                 raise CompileError(f"f32 不支持 {op}")
+            self._release(a, b)
             return Val("v", dst, "f32")
         if self.is_uniform(a) and self.is_uniform(b):
             sa, sb = self.as_sreg(a), self.as_sreg(b)
@@ -421,6 +451,7 @@ class CodeGen:
             self.emit(f"{m[op]} v{dst}, v{av}, v{bv}")
         else:
             raise CompileError(f"int 不支持 {op}")
+        self._release(a, b)
         return Val("v", dst, ty)
 
     def compare(self, op: str, a: Val, b: Val) -> Val:
@@ -453,6 +484,7 @@ class CodeGen:
                  "!=": (f"v_cmp_ne_{base}_e32", False)}
         mn, swap = m[op]
         self.emit(f"{mn} vcc, v{bv if swap else av}, v{av if swap else bv}")
+        self._release(a, b)
         return Val("vpred", None, "bool")
 
     def call(self, node: ast.Call) -> Val:
@@ -465,23 +497,29 @@ class CodeGen:
             ptr = self.expr(node.args[0])
             if ptr.kind != "ptr":
                 raise CompileError("load16 第一个参数必须是指针")
-            off = Val("v", self.as_vreg(self.expr(node.args[1])), "u32")
+            idx = self.expr(node.args[1])
+            off = Val("v", self.as_vreg(idx), "u32")
             lo, hi = self._addr(ptr, off, "u8")
             r = self.alloc_tmp_v()
             self.emit(f"global_load_ushort v{r}, v[{lo}:{hi}], off")
             self.emit("s_waitcnt vmcnt(0)")
             self.free_addr_pair()
+            self._release(idx)
             return Val("v", r, "u32")
         if n == "f16_to_f32":
-            v = self.as_vreg(self.expr(node.args[0]))
+            arg = self.expr(node.args[0])
+            v = self.as_vreg(arg)
             r = self.alloc_tmp_v()
             self.emit(f"v_cvt_f32_f16_e32 v{r}, v{v}")
+            self._release(arg)
             return Val("v", r, "f32")
         if n == "s8":
-            v = self.as_vreg(self.expr(node.args[0]))
+            arg = self.expr(node.args[0])
+            v = self.as_vreg(arg)
             r = self.alloc_tmp_v()
             self.emit(f"v_lshlrev_b32_e32 v{r}, 24, v{v}")
             self.emit(f"v_ashrrev_i32_e32 v{r}, 24, v{r}")
+            self._release(arg)
             return Val("v", r, "s32")
         if n == "tid":
             r = self._alloc_var_v()
@@ -510,9 +548,11 @@ class CodeGen:
                 self.emit(f"v_cvt_u32_f32_e32 v{r}, v{src}")
             else:
                 self.emit(f"v_cvt_i32_f32_e32 v{r}, v{src}")
+            self._release(v)
             return Val("v", r, n)
         if n == "exp":
-            v = self.as_vreg(self.expr(node.args[0]))
+            arg = self.expr(node.args[0])
+            v = self.as_vreg(arg)
             log2e = self.alloc_tmp_v()
             bits = struct.unpack("<I", struct.pack("<f", 1.4426950408889634))[0]
             self.emit(f"v_mov_b32_e32 v{log2e}, 0x{bits:08x}")
@@ -520,28 +560,37 @@ class CodeGen:
             self.emit(f"v_mul_f32_e32 v{r}, v{v}, v{log2e}")
             self.emit("s_nop 0")          # v_exp_f32 的输入 hazard
             self.emit(f"v_exp_f32_e32 v{r}, v{r}")
-            self.free_tmp_v(2)
+            self.free_tmp_v(log2e)
+            self._release(arg)
             return Val("v", r, "f32")
         if n in ("sqrt", "rsqrt"):
-            v = self.as_vreg(self.expr(node.args[0]))
+            arg = self.expr(node.args[0])
+            v = self.as_vreg(arg)
             r = self.alloc_tmp_v()
             op = {"sqrt": "v_sqrt_f32_e32", "rsqrt": "v_rsq_f32_e32"}[n]
             self.emit(f"{op} v{r}, v{v}")
+            self._release(arg)
             return Val("v", r, "f32")
         if n == "fma":
-            a, b, c = (self.as_vreg(self.expr(x)) for x in node.args)
+            argv = [self.expr(x) for x in node.args]
+            a, b, c = (self.as_vreg(x) for x in argv)
             r = self.alloc_tmp_v()
             self.emit(f"v_fma_f32 v{r}, v{a}, v{b}, v{c}")
+            self._release(*argv)
             return Val("v", r, "f32")
         if n == "fabs":
-            v = self.as_vreg(self.expr(node.args[0]))
+            arg = self.expr(node.args[0])
+            v = self.as_vreg(arg)
             r = self.alloc_tmp_v()
             self.emit(f"v_and_b32_e32 v{r}, 0x7fffffff, v{v}")
+            self._release(arg)
             return Val("v", r, "f32")
         if n == "max":
-            a, b = (self.as_vreg(self.expr(x)) for x in node.args)
+            argv = [self.expr(x) for x in node.args]
+            a, b = (self.as_vreg(x) for x in argv)
             r = self.alloc_tmp_v()
             self.emit(f"v_max_f32_e32 v{r}, v{a}, v{b}")
+            self._release(*argv)
             return Val("v", r, "f32")
         raise CompileError(f"未知内建 {n}")
 
@@ -577,7 +626,8 @@ class CodeGen:
         self.emit(f"v_mov_b32_e32 v{hi}, s{ptr.reg + 1}")
         self.emit(f"v_add_co_u32_e32 v{lo}, vcc, v{lo}, v{off}")
         self.emit(f"v_addc_co_u32_e32 v{hi}, vcc, v{hi}, v{self.zero_v}, vcc")
-        self.free_tmp_v()
+        self.free_tmp_v(off)
+        self._release(index)
         return lo, hi
 
     def load(self, node: ast.Subscript) -> Val:
@@ -616,11 +666,17 @@ class CodeGen:
         self.emit(f"{mn} v[{lo}:{hi}], v{src}, off")
         self.emit("s_waitcnt vmcnt(0)")
         self.free_addr_pair()
+        self._release(value)
 
     # ---------------- 语句 ----------------
     def stmt(self, node) -> None:
         self._stmt(node)
         self.tmp_v = self.tmp_base
+        # 语句结束：所有临时值都死了（变量在专属寄存器区，从不落在临时池里），
+        # 池子整体清空
+        self.live_temps.clear()
+        self.free_temps.clear()
+        self.new_temps.clear()
 
     def _stmt(self, node) -> None:
         if isinstance(node, ast.Assign):
@@ -681,6 +737,7 @@ class CodeGen:
                     self.env[name] = Val("v", r, ty)
             else:
                 raise CompileError("不能赋值给指针")
+            self._release(val)
             return
         if self.is_uniform(val) and ty != "f32":
             r = self._alloc_var_s()
@@ -690,6 +747,7 @@ class CodeGen:
             r = self._named_vreg(name)
             self.emit(f"v_mov_b32_e32 v{r}, v{self.as_vreg(val)}")
             self.env[name] = Val("v", r, ty)
+        self._release(val)
 
     def _if(self, node: ast.If) -> None:
         cond = self.expr(node.test)
