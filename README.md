@@ -141,6 +141,7 @@ MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简�
 
 | 工具 | 作用 |
 |---|---|
+| `tools/check_all.sh` | **一条命令跑完全部验证**：重建 → 产物一致性（防止改了生成器忘重建/忘提交）→ 全内核对账 → 编译器回归 → 模型级端到端。`--quick` 跳过重建 |
 | `tools/selftest_all.py` | **发货产物**（`prebuilt/` 那份 HSACO）的全内核对账基线：53 个用例覆盖逐元素 / 归一化 / softmax / top-k / router / MoE / GEMV / 量化解码 / 融合点积 / RT4 W4A4·W4A8 / 激活量化，支持 `--group`、`--only`、`--json` |
 | `tools/bench_decode.py` | 解码（M=1..4）每条权重通路的 us/层 与 GB/s |
 | `tools/bench_model_paths.py` | f32 / W4A16 / W4A8 / W4A4 / 预填充 GEMM 五路对比 |
@@ -148,6 +149,12 @@ MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简�
 
 各生成器（`tools/gen_*.py`）自带的自检只管「现场重新汇编出来的那份」，
 `selftest_all.py` 补的是打包产物那一环。
+
+改完任何内核 / 运行时 / 编译器后：
+
+```bash
+bash tools/check_all.sh
+```
 
 ## 量化权重通路
 

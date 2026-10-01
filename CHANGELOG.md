@@ -78,6 +78,10 @@
   `--only`、`--repeat`、`--json`（可当性能与对账的回归基准）。
   各生成器自带的自检只管「现场重新汇编的那份」，覆盖不到打包产物。
 - `ROADMAP.md`：长期推进清单（效率 / 特性 / 编译器）与当前状态。
+- `tools/check_all.sh`：一条命令跑完全部验证——重建 → **产物一致性**
+  （重建后的 `prebuilt/`、catalog、`docs/KERNELS.md` 必须与仓库一致，
+  防止「改了生成器忘了重建 / 忘了提交产物」）→ 全内核对账 → 编译器回归 →
+  模型级端到端。`--quick` 跳过重建。
 - `tools/bench_decode.py`：解码（M=1..4）权重带宽基准，把每条通路的
   us/层与 GB/s 量出来；覆盖 W4A4/W4A8（含激活量化）、双行变体、
   compressed-tensors INT4、GGUF 原生点积、f32 参考路。
