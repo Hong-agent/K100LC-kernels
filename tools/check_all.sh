@@ -47,8 +47,8 @@ else
     step "1-2/5 跳过重建与产物一致性（--quick）"
 fi
 
-step "3/5 prebuilt 全内核对账"
-if python3 tools/selftest_all.py --json build/selftest.json 2>&1 | tail -3 | grep -q "0 失败"; then
+step "3/5 prebuilt 全内核对账（重复 2 遍，顺便查非确定性）"
+if python3 tools/selftest_all.py --repeat 2 --json build/selftest.json 2>&1 | tail -3 | grep -q "0 失败"; then
     ok "$(python3 -c "
 import json; d = json.load(open('build/selftest.json'))
 print(f\"selftest {d['total']} 个用例全部通过（{d['seconds']}s）\")")"
