@@ -132,6 +132,11 @@ f32 0.695 ms/层、INT4 W4A16 **0.225 ms/层（3.1×）**、INT4 W4A8
 从 279.6 ms/token 压到 **约 39~44 ms/token**（W4A8）或
 **约 36~38 ms/token**（W4A4）。
 
+NVFP4（E2M1 权重 + E4M3 块尺度 + f32 全局尺度，int8 激活）也在包里，
+同一形状解码实测 `nvfp4_gemv<2,1>` **0.114 ms/层（440 GB/s，峰值 49%）**；
+模板里 `<2,1>` 比 `<1,1>` 快 1.5 倍，选模板时注意
+（`tools/bench_decode.py --paths nvfp4`）。
+
 MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简单）与
 `MoEExperts`（token→expert 分桶 + `gather_rows_k` / `moe_combine_gather_k`）。
 实测 `rows=2048 dim=2048 n_exp=8 topk=2`：稠密 4.94 ms → 分桶 **1.95 ms
