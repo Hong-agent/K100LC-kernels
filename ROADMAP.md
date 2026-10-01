@@ -65,9 +65,9 @@ GEMV / 量化解码 / 融合点积），全部通过。
 |---|---|---|---|
 | D1 | 寄存器 liveness / 复用 | 已完成 | v1.4.0 修掉「变量区与临时区重叠」；v1.6.0 加临时寄存器池（用完即归还），长表达式 60 项 → 300+ 项；地址对不再写死 v254/v255，`vgpr_count` 256 → 68 |
 | D2 | spill | 待办 | 现在只有「同时存活的临时值」超过 v245 才报错，实际很难触到；真要做 spill 得先有栈帧约定 |
-| D3 | varying `if/else` | 待办 | 目前 varying 分支只支持无 else |
-| D4 | 新内建 | 待办 | 需要时按 `core.py::CodeGen.call` 增补 |
-| D5 | 编译器自检 | 部分完成 | 已有 vadd/silu/axpy/loop/many_vars/long_expr 六项 + 动态启动；仍缺「生成 vs 参考」的批量回归集 |
+| D3 | varying `if/else` | 已完成 | v1.6.2 用 exec 掩码切换实现；顺带修掉「f32 比较全都编不过」 |
+| D4 | 新内建 | 进行中 | 已补 `min`（用 `-max(-a,-b)`）；后续按需加 `floor/trunc/rndne`、位运算内建等 |
+| D5 | 编译器自检 | 部分完成 | 已有 vadd/silu/axpy/loop/many_vars/long_expr/f32-比较/varying-ifelse 八项 + 动态启动；仍缺「生成 vs 参考」的批量回归集 |
 
 ### E. 工程质量
 

@@ -147,6 +147,73 @@ def longexpr(x: ptr[f32], y: ptr[f32], n: u32):
     print(f"long_expr({nterm} 项) ok")
 
 
+def check_f32_cmp(out_dir: pathlib.Path) -> None:
+    """回归：f32 的 6 个比较运算符都要能编、且语义正确。
+
+    v1.6.2 之前 `v_cmp_*_f32_e32` 的第一个源在编码表里是 ssrc（标量/内联
+    常量），两个 VGPR 相比汇编器直接拒绝——也就是**所有 f32 比较都编不过**。
+    现在统一走 `v_cmp_lt_f32_e64 vcc, x, y`，其余运算符用交换操作数 / 取反
+    掩码拼出来。
+    """
+    ops = {"<": np.less, "<=": np.less_equal, ">": np.greater,
+           ">=": np.greater_equal, "==": np.equal, "!=": np.not_equal}
+    n = 128
+    x = np.linspace(-1, 1, n, dtype=np.float32)
+    x[5] = x[9]                      # 造一对相等的，覆盖 == / !=
+    y = np.roll(x, 3)
+    for op, ref_fn in ops.items():
+        src = f"""
+def cmptest(x: ptr[f32], y: ptr[f32], out: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        if x[i] {op} y[i]:
+            out[i] = 1.0
+        else:
+            out[i] = 0.0
+"""
+        h = compile_source(src, out_dir, "cmptest")[0]
+        o = run_one(h, "cmptest",
+                    [{"buffer": "x"}, {"buffer": "y"}, {"buffer": "out"},
+                     {"scalar": {"dtype": "u32", "value": n}}],
+                    {"x": {"dtype": "f32", "values": x.tolist()},
+                     "y": {"dtype": "f32", "values": y.tolist()},
+                     "out": {"dtype": "f32", "values": [0.0] * n}},
+                    grid=n, workgroup=64)
+        got = np.array(o["out"], np.float32)
+        ref = ref_fn(x, y).astype(np.float32)
+        assert np.array_equal(got, ref), f"f32 {op}: 不等个数 {int((got != ref).sum())}"
+    print("f32 比较（6 个运算符）ok")
+
+
+def check_varying_else(out_dir: pathlib.Path) -> None:
+    """回归：varying 条件的 if/else（v1.6.2 之前只支持无 else）+ min/max。"""
+    src = """
+def vsel(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        v = x[i]
+        if v > 0.0:
+            y[i] = min(v, 3.0)
+        else:
+            y[i] = max(v, -2.0) * 10.0
+"""
+    h = compile_source(src, out_dir, "vsel")[0]
+    n = 256
+    x = np.linspace(-6, 6, n, dtype=np.float32)
+    o = run_one(h, "vsel",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": n}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * n}},
+                grid=n, workgroup=64)
+    got = np.array(o["y"], np.float32)
+    ref = np.where(x > 0.0, np.minimum(x, 3.0),
+                   np.maximum(x, -2.0) * 10.0).astype(np.float32)
+    d = float(np.abs(got - ref).max())
+    assert d < 1e-5, d
+    print(f"varying if/else + min/max ok (max_abs={d:.3e})")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -155,6 +222,8 @@ def main() -> int:
     check_loop(out)
     check_many_vars(out)
     check_long_expr(out)
+    check_f32_cmp(out)
+    check_varying_else(out)
     return 0
 
 

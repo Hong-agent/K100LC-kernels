@@ -288,12 +288,14 @@ class CodeGen:
         self.max_s = max(self.max_s, r + size - 1)
         return r
 
-    def _alloc_tmp_s(self) -> int:
+    def _alloc_tmp_s(self, size: int = 1) -> int:
         r = self.tmp_s
-        self.tmp_s += 1
+        if size == 2 and r % 2:
+            r += 1                       # s[x:x+1] 必须偶数对齐
+        self.tmp_s = r + size
         if self.tmp_s > 101:
             raise CompileError("临时 SGPR 超过 101")
-        self.max_s = max(self.max_s, r)
+        self.max_s = max(self.max_s, r + size - 1)
         return r
 
     # ---------------- 值与类型 ----------------
@@ -469,9 +471,15 @@ class CodeGen:
             return Val("spred", None, "bool")
         av, bv = self.as_vreg(a), self.as_vreg(b)
         if ty == "f32":
-            m = {"<": ("v_cmp_lt_f32_e32", False), "<=": ("v_cmp_gt_f32_e32", True),
-                 ">": ("v_cmp_gt_f32_e32", False), ">=": ("v_cmp_ge_f32_e32", False),
-                 "==": ("v_cmp_eq_f32_e32", False), "!=": ("v_cmp_neq_f32_e32", False)}
+            # f32 比较只有 e64 形式支持「两个都是 VGPR」：e32 的第一个源在
+            # 编码表里是 ssrc（标量/内联常量），`v_cmp_gt_f32_e32 vcc, v3, v64`
+            # 汇编器会直接拒绝（v1.6.2 之前所有 f32 比较都编不过）。
+            # 统一用 `v_cmp_lt_f32_e64 vcc, x, y`，再靠交换操作数 / 取反掩码
+            # 拼出其余运算符。注意：取反得到的 `>=`/`<=` 是「不小于」，
+            # NaN 时与有序比较不同（LLVM 的 ordered 语义）。
+            self._cmp_f32(NodeOp=op, av=av, bv=bv)
+            self._release(a, b)
+            return Val("vpred", None, "bool")
         else:
             base = "i32" if ty == "s32" else "u32"
             m = {"<": (f"v_cmp_lt_{base}_e32", False),
@@ -486,6 +494,30 @@ class CodeGen:
         self.emit(f"{mn} vcc, v{bv if swap else av}, v{av if swap else bv}")
         self._release(a, b)
         return Val("vpred", None, "bool")
+
+    def _cmp_f32(self, NodeOp: str, av: int, bv: int) -> None:
+        """把 f32 比较结果放进 vcc（只用 `v_cmp_lt_f32_e64`）。
+
+        `<` 直接比；`>` 交换操作数；`<=`/`>=` 再用 `s_xor_b64` 取反；
+        `==` 用「a>=b 且 b>=a」，`!=` 再取反一次。
+        """
+        op = NodeOp
+        negate = op in ("<=", ">=")
+        if op in (">", "<="):            # a>b ⇔ b<a；a<=b ⇔ !(b<a)
+            av, bv = bv, av
+        if op in ("==", "!="):
+            p = self._alloc_tmp_s(2)
+            self.emit(f"v_cmp_lt_f32_e64 s[{p}:{p + 1}], v{av}, v{bv}")
+            self.emit(f"s_xor_b64 s[{p}:{p + 1}], s[{p}:{p + 1}], -1")   # a >= b
+            self.emit(f"v_cmp_lt_f32_e64 vcc, v{bv}, v{av}")
+            self.emit("s_xor_b64 vcc, vcc, -1")                          # b >= a
+            self.emit(f"s_and_b64 vcc, vcc, s[{p}:{p + 1}]")
+            if op == "!=":
+                self.emit("s_xor_b64 vcc, vcc, -1")
+            return
+        self.emit(f"v_cmp_lt_f32_e64 vcc, v{av}, v{bv}")
+        if negate:
+            self.emit("s_xor_b64 vcc, vcc, -1")
 
     def call(self, node: ast.Call) -> Val:
         if not isinstance(node.func, ast.Name):
@@ -590,6 +622,21 @@ class CodeGen:
             a, b = (self.as_vreg(x) for x in argv)
             r = self.alloc_tmp_v()
             self.emit(f"v_max_f32_e32 v{r}, v{a}, v{b}")
+            self._release(*argv)
+            return Val("v", r, "f32")
+        if n == "min":
+            # 编码表里没有 f32 的 `v_min`（只有 `v_max` / `v_max3`），
+            # 用 `-max(-a, -b)` 精确实现：浮点取负就是翻符号位。
+            argv = [self.expr(x) for x in node.args]
+            a, b = (self.as_vreg(x) for x in argv)
+            na, nb = self.alloc_tmp_v(), self.alloc_tmp_v()
+            self.emit(f"v_xor_b32_e32 v{na}, 0x80000000, v{a}")
+            self.emit(f"v_xor_b32_e32 v{nb}, 0x80000000, v{b}")
+            r = self.alloc_tmp_v()
+            self.emit(f"v_max_f32_e32 v{r}, v{na}, v{nb}")
+            self.emit(f"v_xor_b32_e32 v{r}, 0x80000000, v{r}")
+            self.free_tmp_v(na)
+            self.free_tmp_v(nb)
             self._release(*argv)
             return Val("v", r, "f32")
         raise CompileError(f"未知内建 {n}")
@@ -752,16 +799,33 @@ class CodeGen:
     def _if(self, node: ast.If) -> None:
         cond = self.expr(node.test)
         if cond.kind == "vpred":
-            if node.orelse:
-                raise CompileError("varying if/else 暂不支持（改成无 else 或 uniform 条件）")
             save = self.save_s
             self.save_s += 2
             end = self.new_label("if_end")
+            if not node.orelse:
+                self.emit(f"s_and_saveexec_b64 s[{save}:{save + 1}], vcc")
+                self.emit(f"s_cbranch_execz {end}")
+                for st in node.body:
+                    self.stmt(st)
+                self.emit(f"s_or_b64 exec, exec, s[{save}:{save + 1}]")
+                self.label(end)
+                self.save_s -= 2
+                return
+            # varying if/else：把 exec 分别掩成 (old & cond) 与 (old & ~cond)
+            # 两段执行；vcc 在两段之间不会被写（body 1 那条路径直接跳到 restore）
+            els = self.new_label("if_else")
+            restore = self.new_label("if_restore")
             self.emit(f"s_and_saveexec_b64 s[{save}:{save + 1}], vcc")
-            self.emit(f"s_cbranch_execz {end}")
+            self.emit(f"s_cbranch_execz {els}")
             for st in node.body:
                 self.stmt(st)
-            self.emit(f"s_or_b64 exec, exec, s[{save}:{save + 1}]")
+            self.emit(f"s_branch {restore}")
+            self.label(els)
+            self.emit(f"s_andn2_b64 exec, s[{save}:{save + 1}], vcc")
+            for st in node.orelse:
+                self.stmt(st)
+            self.label(restore)
+            self.emit(f"s_mov_b64 exec, s[{save}:{save + 1}]")
             self.label(end)
             self.save_s -= 2
             return

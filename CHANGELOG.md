@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.6.2
+
+编译器：f32 比较本来就是坏的（编不过）、varying `if/else`、`min`。
+
+### 修复
+
+- **所有 f32 比较都编不过**。`v_cmp_*_f32_e32` 的第一个源在编码表里是
+  `ssrc`（标量/内联常量），两个 VGPR 相比时汇编器直接
+  `no encoding form for v_cmp_gt_f32_e32 vcc, v3, v64` —— 而编译器总是把两边
+  都转成 VGPR，所以 `< <= > >= == !=` 一个都不能用（既有测试恰好只用到
+  整数比较，一直没暴露）。现在统一发 `v_cmp_lt_f32_e64 vcc, x, y`，
+  其余运算符用交换操作数 / `s_xor_b64 vcc, vcc, -1` 取反、`==` 用
+  「a≥b 且 b≥a」拼出来。`compiler/tests/test_examples.py::check_f32_cmp`
+  逐个运算符对账。
+  * 副作用：`>=` / `<=` 实现为「不小于 / 不大于」，NaN 时与有序比较不同。
+
+### 新增
+
+- **varying 条件的 `if/else`**（原来直接报「暂不支持」）。用 exec 掩码切换：
+  `(old & vcc)` 跑 then，`(old & ~vcc)` 跑 else，最后复原 exec。
+- **`min(a,b)`** 内建。编码表里没有 f32 的 `v_min`（只有 `v_max`/`v_max3`），
+  用 `-max(-a,-b)` 精确实现。
+
+### 验证
+
+- `compiler/tests/test_examples.py`：8 项回归（vadd / silu / axpy / loop /
+  many_vars / long_expr / f32 比较 6 运算符 / varying if-else + min-max）全过。
+- `bash tools/check_all.sh` 全绿。
+
 ## 1.6.1
 
 把「scratch 内核不能跑」这条已知限制查清楚了，文档按证据改写。

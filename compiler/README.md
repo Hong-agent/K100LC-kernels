@@ -31,12 +31,23 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
 
 * 参数类型：`ptr[f32]`、`ptr[u32]`、`ptr[s32]`、`u32`、`s32`、`f32`
 * 内建：`gid()`、`tid()`、`bid()`、`lane()`、`exp`、`sqrt`、`rsqrt`、
-  `fma`、`fabs`、`max`；`f32()` / `u32()` / `s32()` 转换
-* 语句：赋值、`+= -= *= /=`、`if`（varying 只支持无 else）、
+  `fma`、`fabs`、`max`、`min`；`f32()` / `u32()` / `s32()` 转换
+* 语句：赋值、`+= -= *= /=`、`if`（**varying 条件也支持 else**）、
   `for i in range(a, b)`、`break`/`continue`
 * 内存：`buf[index]` load/store，下标可以是 varying 表达式
 * 运算符：`+ - * /`、`& | ^ <<`、比较 `== != < <= > >=`
 * `u8/u16` 指针、`load16`、`f16_to_f32`、`s8`（K-quant 解码所需）
+
+后端说明：
+
+* **f32 比较只有 e64 形式**能两个源都用 VGPR（e32 的第一个源在编码表里是
+  ssrc）。编译器统一发 `v_cmp_lt_f32_e64 vcc, x, y`，其余运算符靠交换操作数 /
+  `s_xor_b64 vcc, vcc, -1` 取反拼出来；`==` 是「a≥b 且 b≥a」。
+  因此 `>=` / `<=` 是「不小于 / 不大于」，NaN 上与有序比较不同
+  （`compiler/tests/test_examples.py::check_f32_cmp` 覆盖 6 个运算符）。
+* `min(a,b)` 用 `-max(-a,-b)` 实现（编码表里没有 f32 的 `v_min`）。
+* varying 条件的 `if/else` 用 exec 掩码切换：`(old & vcc)` 跑 then、
+  `(old & ~vcc)` 跑 else，最后 `s_mov_b64 exec, save` 复原。
 
 编译出的内核使用标准隐藏 kernarg（`hidden_block_count_x`、
 `hidden_group_size_x`…），所以 `gid()` 可用于跨 workgroup。
