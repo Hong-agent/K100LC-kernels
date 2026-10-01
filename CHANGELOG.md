@@ -26,6 +26,15 @@ R=64）的 63.1 还快；dh=128 下 129.8 vs 145.3（差 12%）。但换到 16 �
 `nsplit=64` 又明显更好——所以没有改动 `FlashAttention.plan()` 的取法，只把
 两组数据记在 `ROADMAP.md` B3 后续里备用。
 
+### 顺手量出来的：每次 dispatch 的地板 ~7 us
+
+`add_inplace_k` 什么都不干、用 `LaunchPlan` 批量重放 64 次/批，grid 从 1 扫到
+1024、workgroup 从 64 扫到 256，**每次都是 7.1~7.4 us**（只有 grid=1 是
+9.98 us）；`flash_dec_part_k` 加一句 `s_endpgm` 的空壳是 10.0 us。**和 grid、
+workgroup 都无关，只看发了几个 dispatch**。一层 decoder 10 个内核 → 每个
+token 光 dispatch 就要 ~70 us，在整层 ~0.2 ms/token 里占三分之一；所以 B4
+融合每减一个内核约等于 3~4% 的整层，是比「再抠 part 内核几个 us」更大的头。
+
 ## 1.9.7
 
 **批量投递超过 64 条会死锁——修掉了。** 引擎的 kernarg 只有 `N_SLOT = 64`
