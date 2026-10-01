@@ -92,12 +92,42 @@ def scaleloop(x: ptr[f32], y: ptr[f32], n: u32, s: f32):
     print(f"loop ok (max_abs={d:.3e})")
 
 
+def check_many_vars(out_dir: pathlib.Path) -> None:
+    """回归：局部变量多到碰临时寄存器区时，必须仍然算对。
+
+    以前变量区和临时区都从 v64 附近往上涨，62 个局部变量起两者重叠，
+    生成的内核**不报错但算错**（v1.4.0 修）。
+    """
+    nvar = 150
+    body = "\n".join(f"    t{i} = x[{i}] + 1.0" for i in range(nvar))
+    total = "\n".join(f"    acc = acc + t{i}" for i in range(nvar))
+    src = f"""
+def many(x: ptr[f32], y: ptr[f32], n: u32):
+{body}
+    acc = 0.0
+{total}
+    y[0] = acc
+"""
+    h = compile_source(src, out_dir, "many")[0]
+    x = np.arange(256, dtype=np.float32)
+    o = run_one(h, "many",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": 256}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * 4}},
+                grid=1, workgroup=64)
+    got, ref = float(o["y"][0]), float(np.sum(x[:nvar] + 1.0))
+    assert abs(got - ref) < 1e-2, f"{got} != {ref}"
+    print(f"many_vars({nvar}) ok (got={got:.1f})")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
     check_silu(out)
     check_axpy(out)
     check_loop(out)
+    check_many_vars(out)
     return 0
 
 

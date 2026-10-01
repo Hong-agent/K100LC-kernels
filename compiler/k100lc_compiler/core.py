@@ -84,6 +84,9 @@ class CodeGen:
         self.params: list[Param] = []
         self.env: dict[str, Val] = {}
         self.var_v = 2
+        self.var_regs: dict[str, int] = {}      # 命名变量 → 专属 VGPR
+        self.var_anon = 2                       # 匿名变量（gid/tid/lane）游标
+        self.var_anon_end = 2
         self.var_s = 16
         self.tmp_v = 64
         self.tmp_base = 64
@@ -96,6 +99,7 @@ class CodeGen:
         self.zero_v = 1
         self.label_n = 0
         self._parse_params()
+        self._plan_registers()
 
     # ---------------- 基础 ----------------
     def emit(self, text: str) -> None:
@@ -115,6 +119,62 @@ class CodeGen:
             raise CompileError("VGPR 溢出（v1 不做 spill）")
         self.max_v = max(self.max_v, r)
         return r
+
+    def _plan_registers(self) -> None:
+        """预扫描一遍 AST，一次把「变量区」和「临时区」的边界定下来。
+
+        以前两边都从 v64 附近往上涨：局部变量超过 ~62 个时变量区和临时区会
+        **重叠**——同一个寄存器既放变量又当临时值，生成的内核静默算错
+        （实测 62 个局部变量就开始出错）。现在：
+
+          * 每个命名变量拿一个专属 VGPR（v2 起，按首次出现顺序）；
+          * `gid()/tid()/lane()` 的匿名变量按调用点预留；
+          * 临时值从 `max(64, 变量区末尾)` 起，和变量区完全不重叠。
+        """
+        names: list[str] = []
+        seen: set[str] = set()
+        anon = 0
+
+        def take(nm: str) -> None:
+            if nm not in seen:
+                seen.add(nm)
+                names.append(nm)
+
+        for node in ast.walk(self.fn):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        take(t.id)
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name):
+                    take(node.target.id)
+            elif isinstance(node, ast.AugAssign):
+                if isinstance(node.target, ast.Name):
+                    take(node.target.id)
+            elif isinstance(node, ast.For):
+                tgt = getattr(node.target, "id", None)
+                if tgt:
+                    take(tgt)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in ("tid", "lane"):
+                    anon += 1
+                elif node.func.id == "gid":
+                    anon += 2
+
+        r = 2
+        for nm in names:
+            self.var_regs[nm] = r
+            r += 1
+        self.var_anon = r
+        self.var_anon_end = r + anon
+        self.var_v = self.var_anon_end
+        self.tmp_base = max(64, self.var_anon_end)
+        self.tmp_v = self.tmp_base
+        self.max_v = max(self.max_v, self.var_anon_end - 1)
+        if self.tmp_base > 200:
+            raise CompileError(
+                f"{self.fn.name}: 变量太多，VGPR 变量区已到 v{self.var_anon_end}"
+                f"（上限 v200）")
 
     def free_tmp_v(self, n: int = 1) -> None:
         # v1：不做临时寄存器复用，避免结果寄存器被后续表达式覆盖。
@@ -174,10 +234,19 @@ class CodeGen:
         return "\n".join(self.lines) + "\n"
 
     def _alloc_var_v(self) -> int:
-        r = self.var_v
-        self.var_v += 1
-        if self.var_v > 127:
-            raise CompileError("变量 VGPR 超过 127")
+        """匿名变量（`gid()` / `tid()` / `lane()` 用）——预算在预扫描里定死。"""
+        r = self.var_anon
+        self.var_anon += 1
+        if self.var_anon > self.var_anon_end:
+            raise CompileError("匿名 VGPR 预算耗尽（编译器内部错误）")
+        self.max_v = max(self.max_v, r)
+        return r
+
+    def _named_vreg(self, name: str) -> int:
+        """命名变量专属的 VGPR（预扫描时分配，不会和临时值撞）。"""
+        r = self.var_regs.get(name)
+        if r is None:
+            raise CompileError(f"{name}: 没有预留 VGPR（编译器内部错误）")
         self.max_v = max(self.max_v, r)
         return r
 
@@ -607,7 +676,7 @@ class CodeGen:
                     self.emit(f"s_mov_b32 s{dst.reg}, s{self.as_sreg(val)}")
                 else:
                     # 不把 varying 收回 uniform
-                    r = self._alloc_var_v()
+                    r = self._named_vreg(name)
                     self.emit(f"v_mov_b32_e32 v{r}, v{self.as_vreg(val)}")
                     self.env[name] = Val("v", r, ty)
             else:
@@ -618,7 +687,7 @@ class CodeGen:
             self.emit(f"s_mov_b32 s{r}, s{self.as_sreg(val)}")
             self.env[name] = Val("s", r, ty)
         else:
-            r = self._alloc_var_v()
+            r = self._named_vreg(name)
             self.emit(f"v_mov_b32_e32 v{r}, v{self.as_vreg(val)}")
             self.env[name] = Val("v", r, ty)
 

@@ -27,6 +27,12 @@
 
 ### 修复
 
+- **编译器：变量寄存器区和临时寄存器区重叠**。两边原来都从 v64 附近往上涨，
+  局部变量超过 61 个就开始撞在一起——同一个寄存器既放变量又当临时值，
+  生成的内核**不报错但静默算错**。现在编译前先扫一遍 AST：命名变量拿专属
+  VGPR（v2 起），`gid()/tid()/lane()` 的匿名槽位按调用点预留，临时值从
+  `max(64, 变量区末尾)` 起，两边严格不重叠。可用变量数从 61 提到 ~197，
+  超出会明确报错；`compiler/tests/test_examples.py` 增加 `many_vars` 回归。
 - `Runtime.launch` / `_pack_argv` 支持 numpy 标量（`np.float32`、`np.int32`…）。
   之前把 `np.float32` 直接传进 argv 会 `TypeError`，从数组里取标量是很自然的写法。
 - `W4Runner.gemv_device` 显式校验 `threads == 256`。`gemv_w4a4<M>` /
