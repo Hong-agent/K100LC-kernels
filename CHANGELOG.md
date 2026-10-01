@@ -11,11 +11,15 @@ NVFP4 通路（27 个内核，本包最大的一族）的入口语义查清并�
 | 内核 | 语义 | 结果 |
 |---|---|---|
 | `nvfp4_quant_act` | 块 = 16，`s = amax/127`（amax=0 时取 1），码 = `clamp(rint(x/s), -128, 127)` 的 **int8**；`a`/`b` 是偶/奇下标两条 int8 流 | **逐位一致** |
-| `nvfp4_gemv<1,1>` / `<2,2>` / `nvfp4_gemv_wide<1,1>` | `y[n] = gscale · Σ_k E2M1(w)·E4M3(ws[n,k/16])·(q_act[k]·asc[k/16])`；权重 8 个 4bit 码/u32、低半字节 = 更小的 k；`ws` 是 E4M3 块尺度 | 相对误差 ~2e-7 |
+| `nvfp4_gemv<A,B>` / `nvfp4_gemv_wide<A,B>` | `y[n] = gscale · Σ_k E2M1(w)·E4M3(ws[n,k/16])·(q_act[k]·asc[k/16])`；权重 8 个 4bit 码/u32、低半字节 = 更小的 k；`ws` 是 E4M3 块尺度 | **24 个模板变体全部通过**（A=1..4 × B=1..4，wide 是 A=1..4 × B=1..2），`grid = ceil(N/A)`、`wg = 256` |
 
 参考实现写在 `tools/selftest_all.py` 里（`e2m1_decode` / `e4m3_decode` /
 `nvfp4_quant_ref` / `pack_nvfp4_codes`），`E4M3` 按 OCP FP8 解码
-（1 符号 + 4 指数偏置 7 + 3 尾数）。用例总数 55 → 59。
+（1 符号 + 4 指数偏置 7 + 3 尾数）。
+
+至此 NVFP4 这一族 **27 个内核里 25 个已验证**（只剩两个预填充 GEMM 变体）。
+自检用例 55 → 57（用例数少了但覆盖面大了：24 个 gemv 变体合并成一个扫描用例），
+**全包覆盖数约 80/122**。
 
 ### 待办
 

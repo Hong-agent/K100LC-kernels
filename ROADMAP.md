@@ -54,7 +54,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| C1 | 自检覆盖其余内核 | 进行中 | 已覆盖 59 个（W4 解码全通路 + 激活量化 4 件套 + `split_qkv_k` + **NVFP4 入口 4 个**）；待补：Attention/KV（18 个，全部无用例、语义要从汇编逆向）、ViT、序列/卷积、NVFP4 其余 23 个（含 `nvfp4_gemm_kernel`，grid 约定未定）、`quant_rows_a8_k`、`rope_k`。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据，padding 约定要先定下来才敢写用例；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
+| C1 | 自检覆盖其余内核 | 进行中 | **全包约 80/122**：W4 解码全通路、激活量化 4 件套、`split_qkv_k`、**NVFP4 25/27**（`nvfp4_quant_act` + 24 个 gemv 模板变体）。待补：Attention/KV（18 个，全部无用例、语义要从汇编逆向）、ViT、序列/卷积、NVFP4 的 2 个预填充 GEMM（`nvfp4_gemm_kernel` 的 grid 约定未定）、`quant_rows_a8_k`、`rope_k`。已探明但还没固化：`conv1d_silu_k` 是**带左移位的因果卷积**（`y[t] = silu(Σ_j w[d][j]·x[t−1+j][d] + b[d])`，x 有 T+K−1 行），t=0 那一行读的是缓冲区前的数据，padding 约定要先定下来才敢写用例；`fa_decode_comb_k` 已确认第 3 个指针是 max 归约的输入，但 combine 的公式还没对上 |
 | C2 | 新量化格式 | 待办 | Q3_K / Q2_K / MXFP4 / FP8 等的 `*_dot_k` |
 | C3 | 采样算子 | 待办 | top-p / repetition penalty 等目前只有主机侧 numpy |
 | C4 | `concat2_k` 语义澄清 | 已完成 | 实测是「按 `pre` 分块交替交织」，已写进 `docs/KERNEL_CALLING.md`；如需真拼接要另加内核 |

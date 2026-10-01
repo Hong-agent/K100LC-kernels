@@ -944,35 +944,49 @@ def t_nvfp4_quant(ctx: Ctx):
     return judge(0.0 if ok else 1.0, np.zeros(1), atol=0.0, rtol=0.0)
 
 
-def _nvfp4_gemv_case(kernel: str, n: int, k: int, seed: int, m_rows: int = 4):
-    def run(ctx: Ctx):
-        rng = np.random.default_rng(seed)
-        codes = rng.integers(0, 16, size=(n, k)).astype(np.uint8)
-        wq = pack_nvfp4_codes(codes)
-        ws = rng.integers(1, 0x7F, size=(n, k // 16)).astype(np.uint8)   # 避开 NaN
-        x = rng.standard_normal((1, k)).astype(np.float32) * 2
-        qa, qb, s = nvfp4_quant_ref(x)
-        gscale = float(np.float32(0.75))
-        pwq, pws = ctx.buf(wq), ctx.buf(ws)
-        pa, pb, psc = ctx.buf(qa.reshape(-1)), ctx.buf(qb.reshape(-1)), ctx.buf(s.reshape(-1))
-        py = ctx.out(n)
-        ctx.launch(kernel, (n + m_rows - 1) // m_rows, 256,
-                   [pwq, pws, pa, pb, psc, py, n, k, gscale])
-        act = np.empty((1, k), dtype=np.int32)
-        act[0, 0::2] = qa
-        act[0, 1::2] = qb
-        wv = e2m1_decode(unpack_nvfp4_codes(wq, k))
-        wsc = e4m3_decode(ws)[:, np.repeat(np.arange(k // 16), 16)]
-        av = act.astype(np.float32) * s[:, np.repeat(np.arange(k // 16), 16)]
-        ref = ((wv * wsc) @ av.T * gscale).reshape(-1)
-        return judge(np.abs(ctx.get(py, n) - ref).max(), ref)
-    run.__name__ = f"t_{kernel}"
-    return run
+@case("nvfp4", "nvfp4_gemv 全部 24 个模板变体")
+def t_nvfp4_gemv_all(ctx: Ctx):
+    """`nvfp4_gemv<A,B>`（A=1..4、B=1..4）与 `nvfp4_gemv_wide<A,B>`
+    （A=1..4、B=1..2）共 24 个变体，全部用同一条参考对账。
 
-
-case("nvfp4", "nvfp4_gemv<1,1>")(_nvfp4_gemv_case("nvfp4_gemv<1,1>", 32, 512, 91, 4))
-case("nvfp4", "nvfp4_gemv<2,2>")(_nvfp4_gemv_case("nvfp4_gemv<2,2>", 32, 512, 92, 4))
-case("nvfp4", "nvfp4_gemv_wide<1,1>")(_nvfp4_gemv_case("nvfp4_gemv_wide<1,1>", 32, 512, 93, 4))
+    `grid = ceil(N/A)`、`wg = 256`。数学：
+    `y[n] = gscale · Σ_k E2M1(w)·E4M3(ws[n,k/16])·(q_act[k]·asc[k/16])`。
+    """
+    n, k = 32, 512
+    rng = np.random.default_rng(202)
+    codes = rng.integers(0, 16, size=(n, k)).astype(np.uint8)
+    wq = pack_nvfp4_codes(codes)
+    ws = rng.integers(1, 0x7F, size=(n, k // 16)).astype(np.uint8)   # 避开 E4M3 NaN
+    x = rng.standard_normal((1, k)).astype(np.float32) * 2
+    qa, qb, s = nvfp4_quant_ref(x)
+    gscale = float(np.float32(0.75))
+    pwq, pws = ctx.buf(wq), ctx.buf(ws)
+    pa = ctx.buf(qa.reshape(-1))
+    pb = ctx.buf(qb.reshape(-1))
+    psc = ctx.buf(s.reshape(-1))
+    act = np.empty((1, k), dtype=np.int32)
+    act[0, 0::2] = qa
+    act[0, 1::2] = qb
+    wv = e2m1_decode(unpack_nvfp4_codes(wq, k))
+    wsc = e4m3_decode(ws)[:, np.repeat(np.arange(k // 16), 16)]
+    av = act.astype(np.float32) * s[:, np.repeat(np.arange(k // 16), 16)]
+    ref = ((wv * wsc) @ av.T * gscale).reshape(-1)
+    worst = 0.0
+    bad: list[str] = []
+    for wide, bs in ((False, (1, 2, 3, 4)), (True, (1, 2))):
+        for a in (1, 2, 3, 4):
+            for b in bs:
+                name = f"nvfp4_gemv{'_wide' if wide else ''}<{a},{b}>"
+                py = ctx.out(n)
+                ctx.launch(name, (n + a - 1) // a, 256,
+                           [pwq, pws, pa, pb, psc, py, n, k, gscale])
+                err = float(np.abs(ctx.get(py, n) - ref).max())
+                worst = max(worst, err)
+                if err > 1e-2 + 1e-5 * float(np.abs(ref).max()):
+                    bad.append(name)
+    if bad:
+        raise AssertionError(f"以下变体不一致：{bad}")
+    return judge(worst, ref)
 
 
 # ---------------------------------------------------------------------------
