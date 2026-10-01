@@ -2,7 +2,7 @@
 
 本文件由 `tools/gen_kernel_docs.py` 从 [`python/k100lc_kernels/catalog.json`](../python/k100lc_kernels/catalog.json) 自动生成，请勿手工修改。
 
-预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **120 个内核**。
+预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **122 个内核**。
 
 调用方法、grid 语义和完整示例先看 [`docs/KERNEL_CALLING.md`](KERNEL_CALLING.md)。本页只回答「某个 lookup 到底要传哪些参数」。
 
@@ -15,10 +15,10 @@
 | 融合点积（原生量化块 × 激活） | 12 |
 | 量化解码 | 12 |
 | GEMV / GEMM | 3 |
-| Transformer 常用算子 | 20 |
-| Attention / KV / 视觉塔 | 17 |
+| Transformer 常用算子 | 21 |
+| Attention / KV / 视觉塔 | 18 |
 | 序列模型 / 卷积 | 6 |
-| **合计** | **120** |
+| **合计** | **122** |
 
 ## 速查表
 
@@ -44,6 +44,7 @@
 | `fa_int4` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 val:56:4 val:60:4 val:64:4 val:68:4 val:72:4 val:76:4` | 80 | 58880 | 116 |
 | `fill_k` | `buf:0:8 val:8:4 val:16:8` | 280 | 0 | 0 |
 | `gather_heads_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4 val:24:4 val:28:4 val:32:4 val:40:8` | 304 | 0 | 0 |
+| `gather_rows_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4` | 32 | 0 | 0 |
 | `gdn_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 val:56:4 val:60:4 val:64:4 val:68:4 val:72:4 val:76:4` | 336 | 0 | 528 |
 | `gdn_k2<32>` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 buf:48:8 buf:56:8 val:64:4 val:68:4 val:72:4 val:76:4 val:80:4` | 84 | 512 | 144 |
 | `gelu_mul_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4` | 32 | 0 | 0 |
@@ -83,7 +84,8 @@
 | `kv_append_v_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4 val:44:4 val:48:4 val:52:4` | 56 | 0 | 0 |
 | `l2norm_k` | `buf:0:8 val:8:4 val:12:4` | 272 | 128 | 0 |
 | `layernorm_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4 val:44:4` | 48 | 1024 | 0 |
-| `moe_combine_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4 val:36:4` | 40 | 0 | 0 |
+| `moe_combine_gather_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4 val:40:4` | 48 | 0 | 0 |
+| `moe_combine_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 40 | 0 | 0 |
 | `nvfp4_gemm_kernel` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 val:48:4 val:52:4 val:56:4 val:60:4` | 320 | 10240 | 0 |
 | `nvfp4_gemm_kernel_ng` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 val:48:4 val:52:4 val:56:4 val:60:4` | 320 | 10240 | 0 |
 | `nvfp4_gemv<1,1>` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 buf:32:8 buf:40:8 val:48:4 val:52:4 val:56:4` | 320 | 1024 | 0 |
@@ -2204,6 +2206,22 @@
 | 6 | 40 | 4 | `by_value` | 调用方 |
 | 7 | 44 | 4 | `by_value` | 调用方 |
 
+#### `moe_combine_gather_k`
+
+- mangled 符号：`moe_combine_gather_k`
+- 签名：`moe_combine_gather_k`
+- kernarg：48 B，LDS：0 B，private：0 B
+
+| # | offset | size | kind | 由谁填 |
+|---:|---:|---:|---|---|
+| 0 | 0 | 8 | `global_buffer` | 调用方 |
+| 1 | 8 | 8 | `global_buffer` | 调用方 |
+| 2 | 16 | 8 | `global_buffer` | 调用方 |
+| 3 | 24 | 8 | `global_buffer` | 调用方 |
+| 4 | 32 | 4 | `by_value` | 调用方 |
+| 5 | 36 | 4 | `by_value` | 调用方 |
+| 6 | 40 | 4 | `by_value` | 调用方 |
+
 #### `moe_combine_k`
 
 - mangled 符号：`moe_combine_k`
@@ -2218,7 +2236,6 @@
 | 3 | 24 | 4 | `by_value` | 调用方 |
 | 4 | 28 | 4 | `by_value` | 调用方 |
 | 5 | 32 | 4 | `by_value` | 调用方 |
-| 6 | 36 | 4 | `by_value` | 调用方 |
 
 #### `rmsnorm_gated_k`
 
@@ -2606,6 +2623,20 @@
 | 18 | 96 | 8 | `hidden_global_offset_y` | 运行时 |
 | 19 | 104 | 8 | `hidden_global_offset_z` | 运行时 |
 | 20 | 112 | 2 | `hidden_grid_dims` | 运行时 |
+
+#### `gather_rows_k`
+
+- mangled 符号：`gather_rows_k`
+- 签名：`gather_rows_k`
+- kernarg：32 B，LDS：0 B，private：0 B
+
+| # | offset | size | kind | 由谁填 |
+|---:|---:|---:|---|---|
+| 0 | 0 | 8 | `global_buffer` | 调用方 |
+| 1 | 8 | 8 | `global_buffer` | 调用方 |
+| 2 | 16 | 8 | `global_buffer` | 调用方 |
+| 3 | 24 | 4 | `by_value` | 调用方 |
+| 4 | 28 | 4 | `by_value` | 调用方 |
 
 #### `kv_append_k_k`
 

@@ -1,7 +1,7 @@
 # K100LC-kernels
 
 海光 **K100_LC（gfx926，wave64）** 的可复用 GPU 内核包：自研表驱动汇编器、
-**120 个预编译内核**、无 DTK 的常驻 HSA 运行时、Python / C ABI 封装，以及一个
+**122 个预编译内核**、无 DTK 的常驻 HSA 运行时、Python / C ABI 封装，以及一个
 受限 Python DSL → gfx926 汇编 → HSACO 的编译器。只依赖 `/opt/hyhal` 的 HSA
 运行时，**不依赖 DTK / hipcc / Docker**。
 
@@ -11,7 +11,7 @@
 | 文档 | 内容 |
 |---|---|
 | [`docs/KERNEL_CALLING.md`](docs/KERNEL_CALLING.md) | **内核调用方式（详细）**：Python / C ABI、参数打包、grid 语义、逐类调用配方、排错 |
-| [`docs/KERNELS.md`](docs/KERNELS.md) | 120 个内核的逐参数总表（从 catalog 自动生成） |
+| [`docs/KERNELS.md`](docs/KERNELS.md) | 122 个内核的逐参数总表（从 catalog 自动生成） |
 | [`docs/MODEL_RUNTIME.md`](docs/MODEL_RUNTIME.md) | **模型级 API**：线性层 / RMSNorm / MLP / MoE / KV / 采样与效率实践 |
 | [`docs/ABI.md`](docs/ABI.md) | kernarg 布局、动态启动、2D grid 限制 |
 | [`docs/INT4.md`](docs/INT4.md) | compressed-tensors INT4（W4A16）格式与内核用法 |
@@ -21,7 +21,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| `prebuilt/k100lc_kernels.hsaco` | 完整内核包（120 个内核），可直接加载 |
+| `prebuilt/k100lc_kernels.hsaco` | 完整内核包（122 个内核），可直接加载 |
 | `prebuilt/k100lc_base.hsaco` | 基线内核子集 |
 | `prebuilt/libfm_engine.so` | 常驻 HSA 引擎（C ABI） |
 | `prebuilt/nodtk_kernels.h` | 内核名 / 参数布局的 C 头（由 HSACO metadata 生成） |
@@ -94,7 +94,7 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
     /tmp/cpp_alloc prebuilt/k100lc_kernels.hsaco
 ```
 
-## 内核分类（120）
+## 内核分类（122）
 
 | 分类 | 数量 | 说明 |
 |---|---:|---|
@@ -103,8 +103,8 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
 | 融合点积 `*_dot_k` | 12 | GGUF 11 类编码 + compressed-tensors INT4 的原生解码 + 点积 |
 | 量化解码 | 12 | Q4_0 / Q8_0 / K-quant / I-quant → f32 或 i8 |
 | GEMV / GEMM | 3 | f32、int8 通用 GEMV 与旧版 f32 GEMV |
-| Transformer 常用算子 | 20 | RMSNorm / LayerNorm / softmax / top-k / router / MoE 合并 / rope / 激活等 |
-| Attention / KV / 视觉塔 | 17 | FlashAttention、KV 写入、注意力量化、ViT 算子 |
+| Transformer 常用算子 | 21 | RMSNorm / LayerNorm / softmax / top-k / router / MoE 合并 / rope / 激活等 |
+| Attention / KV / 视觉塔 | 18 | FlashAttention、KV 写入、注意力量化、gather_rows、ViT 算子 |
 | 序列模型 / 卷积 | 6 | GDN 递推、深度卷积、SSM gate、QKV 切分 |
 
 完整清单与每个内核的显式参数见 [`docs/KERNELS.md`](docs/KERNELS.md)。
@@ -113,9 +113,9 @@ LD_LIBRARY_PATH=/opt/hyhal/lib:$LD_LIBRARY_PATH \
 
 `k100lc_kernels.model` 提供可直接组合的推理算子：`F32Linear` /
 `DotLinear`（INT4、GGUF 11 类编码）/ `Int4Linear`（W4A16 / W4A8 / W4A4）/
-`RT4Linear` / `RMSNorm` / `SwiGLU` / `MLP` / `MoECombine` / `KVCache` /
-`Sampler` / `run_sequence`。权重上传一次、工作缓冲复用、整段前向只 sync
-一次；启动开销从约 10 us 降到约 7 us。
+`RT4Linear` / `RMSNorm` / `SwiGLU` / `MLP` / `MoECombine` / `MoEExperts` /
+`KVCache` / `Sampler` / `run_sequence`。权重上传一次、工作缓冲复用、整段
+前向只 sync 一次；启动开销从约 10 us 降到约 7 us。
 
 ```bash
 python3 examples/python_model_layer.py --rows 4 --dim 512 --ffn 1024
@@ -127,9 +127,14 @@ MoE 合并 `~4.5e-8`，GGUF `q4_0` / `iq4nl` 路径 `~4e-7`。API、MoE 组装�
 [`docs/MODEL_RUNTIME.md`](docs/MODEL_RUNTIME.md)。
 
 真实形状 `17408×5120` 的线性层基准（M=1）：f32 0.699 ms/层、INT4 W4A16
-0.247 ms/层、INT4 W4A8 **0.098 ms/层（7.15×）**、INT4 W4A4
-**0.089 ms/层（7.81×）**；400 层权重流从 279.6 ms/token 压到
-**39.2 ms/token**（W4A8）或 **35.6 ms/token**（W4A4）。
+0.247 ms/层、INT4 W4A8 **0.098~0.111 ms/层（6~7×）**、INT4 W4A4
+**0.089~0.095 ms/层（7~8×）**；400 层权重流从 279.6 ms/token 压到
+**约 39~44 ms/token**（W4A8）或 **约 36~38 ms/token**（W4A4）。
+
+MoE 支持两条路：`MoECombine`（所有专家 × 全部行，小 batch 简单）与
+`MoEExperts`（token→expert 分桶 + `gather_rows_k` / `moe_combine_gather_k`）。
+实测 `rows=2048 dim=2048 n_exp=8 topk=2`：稠密 4.97 ms → 分桶 **1.84 ms
+（2.71×）**。
 
 ## 量化权重通路
 

@@ -43,6 +43,7 @@ import gen_int4_dot  # noqa: E402
 import gen_quant_fast  # noqa: E402
 import gen_gemv_w4a4_r2  # noqa: E402
 import gen_moe_combine  # noqa: E402
+import gen_moe_route  # noqa: E402
 
 MODULES = [
     gen_gemv_f32, gen_gemv_f32_warp, gen_gemv_i8, gen_iq4nl_dequant, gen_iq4nl_to_i8,
@@ -55,6 +56,7 @@ MODULES = [
     gen_quant_fast,
     gen_gemv_w4a4_r2,
     gen_moe_combine,
+    gen_moe_route,
 ]
 
 

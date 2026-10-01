@@ -385,7 +385,9 @@ rt.launch("gelu_mul_k", (n + 63) // 64, 64, [py, pg, pu, n, 64])
 | `softmax_k` | `(y, x, rows, cols, 64)` | grid=rows，wg=64 | `cols % 64 == 0` |
 | `topk_k` | `(x, idx, val, rows, cols, k)` | `ceil(rows/64)`，wg=64 | `k <= 16` |
 | `router_top10_k` | `(logits, ids, weights, rows, n_experts)` | grid=rows，wg=64 | 固定 top-10 |
-| `moe_combine_k` | `(y, exp_out, weights, n_exp, rows, dim, magic_dim)` | `ceil(rows*dim/64)`，wg=64 | 专家输出加权合并 |
+| `moe_combine_k` | `(y, exp_out, weights, n_exp, rows, dim)` | grid=rows，wg=64 | 稠密专家输出加权合并 |
+| `gather_rows_k` | `(dst, src, idx, rows, dim)` | grid=rows，wg=64 | 按索引 gather 行；`dim%4==0` |
+| `moe_combine_gather_k` | `(y, exp_bucket, weights, base, n_sel, rows, dim)` | grid=rows，wg=64 | 分桶 MoE 合并；`base` 由主机预计算 |
 | `argmax_k` | `(x, n, idx)` | grid-stride | 单行 argmax |
 
 ```python
@@ -394,10 +396,17 @@ rt.launch("softmax_k", rows, 64, [py, px, rows, cols, 64])
 rt.launch("topk_k", (rows + 63) // 64, 64, [px, pidx, pval, rows, cols, 16])
 rt.launch("router_top10_k", rows, 64, [plogits, pids, pweights, rows, n_experts])
 
-# MoE 合并：y[r,:] = sum_e weights[r,e] * exp_out[e,r,:]
-# exp_out 布局 [n_exp, rows, dim]，grid = ceil(rows*dim/64)
-rt.launch("moe_combine_k", (rows * dim + 63) // 64, 64,
-          [py, pexp, pweights, n_exp, rows, dim, div_magic(dim, rows * dim)])
+# MoE 合并（稠密）：y[r,:] = sum_e weights[r,e] * exp_out[e,r,:]
+# exp_out 布局 [n_exp, rows, dim]，grid = rows（一个 workgroup 一行）
+rt.launch("moe_combine_k", rows, 64,
+          [py, pexp, pweights, n_exp, rows, dim])
+
+# 分桶 MoE：先 gather 行，再合并
+# base[r,e] = 专家桶偏移 + 桶内位置（主机 NumPy 预计算）
+rt.launch("gather_rows_k", total_assigned, 64,
+          [px_bucket, px, pidx, total_assigned, dim])
+rt.launch("moe_combine_gather_k", rows, 64,
+          [py, pexp_bucket, pweights, pbase, topk, rows, dim])
 ```
 
 ### 6.3 f32 / int8 通用 GEMV

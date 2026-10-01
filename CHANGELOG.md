@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.3.0
+
+MoE token→expert 分桶，以及合并内核的通用化重写。
+
+### 新增
+
+- `gather_rows_k`：按索引把行 gather 成连续桶（一个 workgroup 一行，
+  lane 用 `dwordx4` 搬 4 个 f32）。
+- `moe_combine_gather_k`：按 `base[r,e]`（专家桶偏移 + 桶内位置）合并专家
+  输出；`base` 由主机 NumPy 一次算好。
+- `model.MoEExperts`：token→expert 分桶 MoE，缓冲复用、一次 sync。
+- `tools/bench_moe.py`：稠密全专家 vs 分桶基准。
+
+### 优化 / 修复
+
+- `moe_combine_k` / `moe_combine_gather_k` 改成「一个 workgroup 一行、
+  lane 沿 dim 循环」，去掉魔法除法参数；旧版按元素切分在 `dim=2048` 时
+  魔法除无法精确表示，会直接报错。
+- `MoEExperts.route()` 从 Python 逐元素循环改成 NumPy 向量化
+  （排序 + `argsort` rank），`rows=512` 时路由开销从毫秒级降到微秒级。
+- `F32Linear` / `DotLinear` / `Int4Linear` / `RT4Linear` 支持
+  `out_dev=`，MoE 专家可以直接写进合并缓冲区，不需要额外拷贝。
+
+### 实测
+
+| 配置 | 稠密全专家 | 分桶 | 加速 |
+|---|---:|---:|---:|
+| rows=512 dim=512 n_exp=8 topk=2 | 0.518 ms | 0.474 ms | 1.09× |
+| rows=2048 dim=2048 n_exp=8 topk=2 | 4.968 ms | **1.835 ms** | **2.71×** |
+
+内核总数 122；`examples/python_model_layer.py` 增加分桶 MoE 对账，
+全部通过。
+
 ## 1.2.0
 
 INT4 推理性能强压榨：把 compressed-tensors INT4 切到 W4A8/W4A4 打包点积通路。

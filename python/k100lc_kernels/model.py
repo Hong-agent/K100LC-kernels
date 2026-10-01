@@ -39,7 +39,7 @@ from .runtime import Runtime
 __all__ = [
     "cdiv", "div_magic", "Workspace",
     "QUANT_SPECS", "DotLinear", "F32Linear", "RT4Linear", "Int4Linear",
-    "RMSNorm", "SwiGLU", "MLP", "MoECombine", "KVCache", "Sampler",
+    "RMSNorm", "SwiGLU", "MLP", "MoECombine", "MoEExperts", "KVCache", "Sampler",
     "run_sequence",
 ]
 
@@ -201,10 +201,11 @@ class DotLinear:
             self._out_cache[rows] = out
         return out
 
-    def forward_device(self, x_dev: int, rows: int, sync: bool = False) -> int:
+    def forward_device(self, x_dev: int, rows: int, sync: bool = False,
+                       out_dev: int | None = None) -> int:
         """在设备上算 `y = W·x`，返回 y 的设备指针（默认不 sync）。"""
         spec = self.spec
-        out = self._out(rows)
+        out = int(out_dev) if out_dev is not None else self._out(rows)
         base = [self.w, int(x_dev), self.partial, self.nblocks, 64, self.nbpr,
                 self.m_nbpr, self.n, self.m_rows]
         base += self.tables
@@ -274,15 +275,17 @@ class F32Linear:
             self._rows_cache[rows] = b
         return b
 
-    def forward_device(self, x_dev: int, rows: int, sync: bool = False) -> int:
+    def forward_device(self, x_dev: int, rows: int, sync: bool = False,
+                       out_dev: int | None = None) -> int:
         b = self._bind(rows)
+        out = int(out_dev) if out_dev is not None else b["out"]
         for r in range(rows):
             self.rt.launch("gemv_f32_warp_k", self.n, 64,
                            [self.w, int(x_dev) + r * self.k * 4,
-                            b["out"] + r * self.n * 4, self.n, self.k, 64])
+                            out + r * self.n * 4, self.n, self.k, 64])
         if sync:
             self.rt.sync()
-        return b["out"]
+        return out
 
     def forward(self, x: np.ndarray, sync: bool = True):
         x = np.ascontiguousarray(x, dtype=np.float32)
@@ -310,9 +313,11 @@ class RT4Linear:
         self.runner = runner or W4Runner(rt)
         self.tag = tag or f"rt4_{id(self):x}"
 
-    def forward_device(self, x_dev: int, rows: int, sync: bool = False) -> int:
+    def forward_device(self, x_dev: int, rows: int, sync: bool = False,
+                       out_dev: int | None = None) -> int:
         return self.runner.gemv_device(self.path, self.wq, self.ws_scale, None,
                                        self.n, self.k, x_dev=x_dev, m=rows,
+                                       y_dev=out_dev,
                                        sync=sync)
 
     def forward(self, x: np.ndarray) -> np.ndarray:
@@ -380,10 +385,12 @@ class Int4Linear:
             self._y_cache[rows] = y
         return y
 
-    def forward_device(self, x_dev: int, rows: int, sync: bool = False) -> int:
+    def forward_device(self, x_dev: int, rows: int, sync: bool = False,
+                       out_dev: int | None = None) -> int:
         if self._dot is not None:
-            return self._dot.forward_device(x_dev, rows, sync=sync)
-        y = self._y(rows)
+            return self._dot.forward_device(x_dev, rows, sync=sync,
+                                            out_dev=out_dev)
+        y = int(out_dev) if out_dev is not None else self._y(rows)
         if rows <= 4:
             return self._runner.gemv_device(
                 self.path, self.wq, self.ws_f16, None, self.n, self.k,
@@ -517,7 +524,6 @@ class MoECombine:
         self.exp_out = self.ws.buffer(tag + ".exp", rows * n_exp * dim * 4)
         self.weights = self.ws.buffer(tag + ".w", rows * n_exp * 4)
         self.out = self.ws.buffer(tag + ".out", rows * dim * 4)
-        self.magic_dim = div_magic(dim, rows * dim)
 
     def slot(self, e: int) -> int:
         """第 e 个专家输出的设备指针（布局 `[n_exp, rows, dim]`）。"""
@@ -526,10 +532,9 @@ class MoECombine:
     def forward_device(self, weights_dev: int | None = None,
                        sync: bool = False) -> int:
         w = int(weights_dev) if weights_dev is not None else self.weights
-        total = self.rows * self.dim
-        self.rt.launch("moe_combine_k", cdiv(total, 64), 64,
+        self.rt.launch("moe_combine_k", self.rows, 64,
                        [self.out, self.exp_out, w, self.n_exp,
-                        self.rows, self.dim, self.magic_dim])
+                        self.rows, self.dim])
         if sync:
             self.rt.sync()
         return self.out
@@ -542,6 +547,109 @@ class MoECombine:
         out = self.forward_device(sync=True)
         return self.rt.download(out, self.rows * self.dim, np.float32) \
             .reshape(self.rows, self.dim)
+
+
+class MoEExperts:
+    """token→expert 分桶的 MoE 前向（比「所有专家 × 全部行」省 topk 倍算力）。
+
+    流程：
+
+    1. 主机侧按 router 结果把 token 分成每个专家的桶（`route()`）；
+    2. `gather_rows_k` 把 x 的对应行 gather 到连续桶里；
+    3. 每个非空专家只在自己的桶上跑线性层，输出写进 `exp_bucket`；
+    4. `moe_combine_gather_k` 按 `pos[r,e]` 把专家结果加权合并。
+
+    构造时给定 `rows`（token 数）与 `topk`，之后所有缓冲都复用。
+    """
+
+    def __init__(self, rt: Runtime, experts, rows: int, dim: int, out_dim: int,
+                 topk: int, ws: Workspace | None = None, tag: str = "moe_experts"):
+        if dim % 4:
+            raise ValueError(f"dim={dim} 必须是 4 的倍数（gather_rows_k 用 dwordx4）")
+        self.rt = rt
+        self.experts = list(experts)
+        self.n_exp = len(self.experts)
+        self.rows, self.dim, self.out_dim, self.topk = \
+            int(rows), int(dim), int(out_dim), int(topk)
+        if topk > self.n_exp:
+            raise ValueError(f"topk={topk} 大于专家数 {self.n_exp}")
+        self.tag = tag
+        self._own_ws = ws is None
+        self.ws = ws or Workspace(rt)
+        cap = rows * topk
+        self.x_bucket = self.ws.buffer(tag + ".xb", cap * dim * 4)
+        self.exp_bucket = self.ws.buffer(tag + ".eb", cap * out_dim * 4)
+        self.idx = self.ws.buffer(tag + ".idx", cap * 4)
+        self.base = self.ws.buffer(tag + ".base", cap * 4)
+        self.weights = self.ws.buffer(tag + ".w", cap * 4)
+        self.y = self.ws.buffer(tag + ".y", rows * out_dim * 4)
+
+    def route(self, ids, weights):
+        """返回 `(bucket_rows, pos, weights, offsets, valid)`（主机 NumPy 数组）。"""
+        ids = np.asarray(ids)
+        weights = np.asarray(weights, dtype=np.float32)
+        rows, topk = ids.shape
+        if rows != self.rows or topk != self.topk:
+            raise ValueError(f"路由形状 {ids.shape} 与构造时的 "
+                             f"({self.rows},{self.topk}) 不一致")
+        valid = (ids >= 0) & (ids < self.n_exp) & (weights != 0.0)
+        flat_idx = np.flatnonzero(valid.reshape(-1))
+        ex = ids.reshape(-1)[flat_idx].astype(np.int64)
+        row_of = (flat_idx // topk).astype(np.uint32)
+        counts = np.bincount(ex, minlength=self.n_exp).astype(np.int64)
+        offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.uint32)
+        order = np.argsort(ex, kind="stable")       # 稳定排序 → 桶内顺序 = pos
+        bucket = row_of[order]
+        rank = np.empty(len(flat_idx), dtype=np.int64)
+        rank[order] = (np.arange(len(flat_idx))
+                       - np.repeat(offsets[:-1].astype(np.int64), counts))
+        pos_flat = np.zeros(rows * topk, dtype=np.uint32)
+        pos_flat[flat_idx] = rank.astype(np.uint32)
+        return bucket, pos_flat.reshape(rows, topk), weights, offsets, valid
+
+    def forward_device(self, x_dev: int, rows: int, ids, weights,
+                       sync: bool = False) -> int:
+        bucket, pos, w, offsets, valid = self.route(ids, weights)
+        total = int(bucket.size)
+        if total == 0:
+            self.rt.upload(self.y, np.zeros(rows * self.out_dim, dtype=np.float32))
+            if sync:
+                self.rt.sync()
+            return self.y
+        self.rt.upload(self.idx, bucket)
+        self.rt.launch("gather_rows_k", total, 64,
+                       [self.x_bucket, int(x_dev), self.idx, total, self.dim])
+        # base[r,e] = 该 (r,e) 在 exp_bucket 里的行号 = 专家桶偏移 + 桶内位置
+        ids_arr = np.asarray(ids)
+        base = np.zeros((rows, self.topk), dtype=np.uint32)
+        base[valid] = offsets[ids_arr[valid]] + pos[valid]
+        self.rt.upload(self.base, base.reshape(-1))
+        self.rt.upload(self.weights, w.reshape(-1))
+        for e, expert in enumerate(self.experts):
+            n = int(offsets[e + 1] - offsets[e])
+            if n == 0:
+                continue
+            expert.forward_device(
+                self.x_bucket + int(offsets[e]) * self.dim * 4, n,
+                out_dev=self.exp_bucket + int(offsets[e]) * self.out_dim * 4,
+                sync=False)
+        self.rt.launch("moe_combine_gather_k", rows, 64,
+                       [self.y, self.exp_bucket, self.weights, self.base,
+                        self.topk, rows, self.out_dim])
+        if sync:
+            self.rt.sync()
+        return self.y
+
+    def forward(self, x: np.ndarray, ids, weights) -> np.ndarray:
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        if x.ndim == 1:
+            x = x[None, :]
+        rows = x.shape[0]
+        px = self.ws.buffer(self.tag + ".x", x.nbytes)
+        self.rt.upload(px, x.reshape(-1))
+        out = self.forward_device(px, rows, ids, weights, sync=True)
+        return self.rt.download(out, rows * self.out_dim, np.float32) \
+            .reshape(rows, self.out_dim)
 
 
 class KVCache:

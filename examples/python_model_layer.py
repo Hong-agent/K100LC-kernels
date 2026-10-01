@@ -25,8 +25,8 @@ sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from k100lc_kernels import (DotLinear, F32Linear, Int4Linear, MLP, MoECombine,  # noqa: E402
-                            RMSNorm, Runtime, Workspace, dequant_int4_group128,
-                            pack_int4_group128)
+                            MoEExperts, RMSNorm, Runtime, Workspace,
+                            dequant_int4_group128, pack_int4_group128)
 from iq_dequant import dequant_iq4_nl, dequant_q4_0_fast  # noqa: E402
 
 FAILURES: list[str] = []
@@ -138,6 +138,51 @@ def run_moe(rt: Runtime, rows: int, dim: int, n_exp: int,
     ws.free()
 
 
+def run_moe_bucketed(rt: Runtime, rows: int, dim: int, n_exp: int,
+                     rng: np.random.Generator) -> None:
+    """token→expert 分桶 MoE：与稠密「所有专家 × 全部行」对账并比时间。"""
+    topk = min(2, n_exp)
+    ws = Workspace(rt)
+    x = rng.standard_normal((rows, dim), dtype=np.float32)
+    wts = [rng.normal(0, 0.05, (dim, dim)).astype(np.float32)
+           for _ in range(n_exp)]
+    ids = rng.integers(0, n_exp, size=(rows, topk))
+    weights = rng.random((rows, topk), dtype=np.float32)
+    ref = np.stack([
+        sum(weights[r, e] * (x[r] @ wts[ids[r, e]].T) for e in range(topk))
+        for r in range(rows)])
+
+    experts = [F32Linear(rt, dim, dim, wts[e], ws, f"moe_exp{e}")
+               for e in range(n_exp)]
+    moe = MoEExperts(rt, experts, rows, dim, dim, topk, ws, "moe_bucket")
+    out = moe.forward(x, ids, weights)
+    err = _rel(out, ref)
+    if err > 1e-4:
+        FAILURES.append("moe_bucketed")
+    t_bucket = _bench(lambda: moe.forward(x, ids, weights), 5)
+
+    # 稠密参照：每个专家都跑全部行，再用 moe_combine_k 合并
+    dense = MoECombine(rt, rows, dim, n_exp, ws, "moe_dense")
+    all_w = np.zeros((rows, n_exp), dtype=np.float32)
+    for r in range(rows):
+        for e in range(topk):
+            all_w[r, ids[r, e]] += weights[r, e]
+    px = ws.buffer("moe_bucket.x", x.nbytes)
+    rt.upload(px, x.reshape(-1))
+
+    def dense_run():
+        for e, expert in enumerate(experts):
+            expert.forward_device(px, rows, out_dev=dense.slot(e), sync=False)
+        dense.rt.upload(dense.weights, all_w.reshape(-1))
+        dense.forward_device(sync=True)
+
+    t_dense = _bench(dense_run, 5)
+    print(f"[moe ] rows={rows} dim={dim} n_exp={n_exp} topk={topk} "
+          f"max_rel={err:.2e}  bucketed={t_bucket:.3f} ms  dense={t_dense:.3f} ms "
+          f"speedup={t_dense/t_bucket:.2f}x")
+    ws.free()
+
+
 def run_gguf(rt: Runtime, dim: int, rng: np.random.Generator) -> None:
     """GGUF 量化路径：q4_0 / iq4nl 的原始字节直接进 DotLinear。"""
     ws = Workspace(rt)
@@ -205,6 +250,7 @@ def main() -> int:
     run_f32(rt, args.rows, args.dim, args.ffn, rng)
     run_int4(rt, args.rows, args.dim, args.ffn, rng)
     run_moe(rt, args.rows, args.dim, args.moe_exp, rng)
+    run_moe_bucketed(rt, max(16, args.rows * 4), args.dim, args.moe_exp, rng)
     run_gguf(rt, args.dim, rng)
     run_int4_fast(rt, args.rows, args.dim, args.ffn, rng)
     if FAILURES:

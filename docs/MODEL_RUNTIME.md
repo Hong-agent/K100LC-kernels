@@ -162,8 +162,8 @@ fast4 = Int4Linear(rt, n, k, packed, scale, "w4a4", ws, "gate_w4a4")
 |---|---:|---:|---:|---:|
 | f32 | 0.699 ms | 510 GB/s | 1.00× | 9.1e-7 |
 | INT4 W4A16 | 0.247 ms | 186 GB/s | 2.83× | 1.2e-1（权重 INT4） |
-| INT4 W4A8 | **0.098 ms** | 470 GB/s | **7.15×** | 1.2e-1 |
-| INT4 W4A4 | **0.089 ms** | 514 GB/s | **7.81×** | 1.5e-1 |
+| INT4 W4A8 | **0.098~0.111 ms** | 414~470 GB/s | **6.1~7.2×** | 1.2e-1 |
+| INT4 W4A4 | **0.089~0.095 ms** | 485~514 GB/s | **7.2~7.8×** | 1.5e-1 |
 
 W4A16 与 W4A8 的误差都以权重 INT4 量化为主；W4A8 额外把激活量化到 int8，
 在同一份权重上只多约 0.5%~0.8% 的相对误差（`examples/python_model_layer.py`
@@ -182,27 +182,62 @@ W4A8 GEMV（约 0.6% 误差），代价是比 GEMM 慢约 5 倍。
 
 ## 4. MoE
 
-三件套：
+公共的三件套：
 
 1. `router_top10_k`：logits → top-10 专家 id + 权重；
-2. 每个专家的线性层（`DotLinear` / `RT4Linear`）；
-3. `moe_combine_k`：按 router 权重把专家输出加权求和。
+2. 每个专家的线性层（`DotLinear` / `Int4Linear` / `RT4Linear`）；
+3. 合并内核：`moe_combine_k`（稠密）或 `moe_combine_gather_k`（分桶）。
 
-先用「所有专家 × 全部行」的稠密方式跑专家，再合并；对小批解码（M≤4）足够
-简单，也避免了主机侧 gather：
+### 4.1 稠密：所有专家 × 全部行（小 batch 简单）
 
 ```python
 from k100lc_kernels.model import MoECombine
 
-moe = MoECombine(rt, rows, dim, n_sel, ws, "moe0")
+rows, dim, n_exp = 4, 5120, 64
+available = [0, 3, 7]                       # 本例只跑几个专家
+moe = MoECombine(rt, rows, dim, len(available), ws, "moe0")
 for e, expert in enumerate(selected_experts):
     expert.forward_device(x_dev, rows, out_dev=moe.slot(e), sync=False)
 rt.upload(moe.weights, router_weights)          # [rows, n_sel]
 y_dev = moe.forward_device(sync=True)
 ```
 
-`moe_combine_k` 是 1D 启动（grid = ceil(rows*dim/64)），`exp_out` 布局为
-`[n_exp, rows, dim]`，权重布局为 `[rows, n_exp]`。
+`moe_combine_k(y, exp_out, weights, n_exp, rows, dim)`：grid=rows、
+workgroup=64，一个 workgroup 负责一行，lane 沿 dim 循环。`exp_out` 布局
+`[n_exp, rows, dim]`，`weights` 布局 `[rows, n_exp]`。
+
+### 4.2 分桶：token→expert（省最多 topk 倍算力）
+
+`MoEExperts` 先按 router 结果把 token 分到各专家的桶里，每个专家只处理自己
+收到的 token，再用 `moe_combine_gather_k` 按桶内位置合并：
+
+```python
+from k100lc_kernels.model import MoEExperts
+
+moe = MoEExperts(rt, experts, rows, dim, out_dim, topk, ws, "moe")
+y = moe.forward(x, router_ids, router_weights)   # ids/weights: [rows, topk]
+```
+
+底层两个内核：
+
+| 内核 | 作用 | 启动 |
+|---|---|---|
+| `gather_rows_k(dst, src, idx, rows, dim)` | 按索引把 x 的行 gather 成连续桶 | grid=rows，wg=64；要求 `dim%4==0` |
+| `moe_combine_gather_k(y, exp_bucket, weights, base, n_sel, rows, dim)` | 按 `base[r,e]` 合并专家输出 | grid=rows，wg=64 |
+
+`base[r,e] = 专家桶偏移 + 桶内位置`，由主机侧 `MoEExperts.route()` 用 NumPy
+一次算好；内核不做任何除法（旧版按元素切分需要魔法除，`dim=2048` 时无法
+精确表示）。
+
+实测（INT4 W4A8 专家，round-robin 路由保证每个专家桶大小一致）：
+
+| 配置 | 稠密 | 分桶 | 加速 |
+|---|---:|---:|---:|
+| rows=512 dim=512 n_exp=8 topk=2 | 0.518 ms | 0.474 ms | 1.09× |
+| rows=2048 dim=2048 n_exp=8 topk=2 | 4.968 ms | **1.835 ms** | **2.71×** |
+
+分桶的收益随 batch 增大而增大：解码 M≤4 时两者算力相同，稠密路径反而少一次
+gather；预填充（M 几百以上）直接用 `MoEExperts`。
 
 ## 5. KV cache
 
@@ -243,10 +278,10 @@ idx_dev = Sampler(rt, ws).argmax_device(logits_dev, rows, vocab)
 |---|---:|---:|---:|---:|
 | f32 | 356.5 MB | 0.699 ms | 2.799 ms | 279.6 ms/token |
 | INT4 W4A16 | 46.0 MB | 0.247 ms | 0.945 ms | 98.8 ms/token |
-| INT4 W4A8 | 46.0 MB | **0.098 ms** | **0.156 ms** | **39.2 ms/token** |
+| INT4 W4A8 | 46.0 MB | **0.098~0.111 ms** | **0.156 ms** | **约 39~44 ms/token** |
 | INT4 W4A4 | 46.0 MB | **0.089 ms** | **0.152 ms** | **35.6 ms/token** |
 
-同一份权重，W4A8 相对 f32 快 **7.15×**（M=1）/ **17.9×**（M=4），
+同一份权重，W4A8 相对 f32 快 **6~7×**（M=1）/ **17.9×**（M=4），
 相对原生的 W4A16 快 **2.5×**。W4A16 的等效带宽低是因为它受 4bit 解码
 指令吞吐限制（见 [`INT4.md`](INT4.md) 第 5.3 节），不是访存限制；
 W4A8/W4A4 用打包点积指令把解码成本摊掉。
