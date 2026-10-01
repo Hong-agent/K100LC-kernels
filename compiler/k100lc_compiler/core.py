@@ -857,6 +857,8 @@ class CodeGen:
             self._if(node)
         elif isinstance(node, ast.For):
             self._for(node)
+        elif isinstance(node, ast.While):
+            self._while(node)
         elif isinstance(node, ast.Break):
             self.emit(f"s_branch {self.loop_stack[-1][1]}")
         elif isinstance(node, ast.Continue):
@@ -974,6 +976,30 @@ class CodeGen:
         self.label(inc)
         self.emit(f"s_add_i32 s{s_i}, s{s_i}, 1")
         self.emit(f"s_branch {loop}")
+        self.label(end)
+
+    def _while(self, node: ast.While) -> None:
+        """`while cond:` —— 条件必须是 **uniform**（标量）比较。
+
+        varying 条件需要 loop-carried 的 exec 掩码（每一轮都可能退出不同的
+        lane），那套约定还没定，所以直接报错而不是给错的结果。
+        `while 1:` 支持（无条件的无限循环，靠 `break` 退出）。
+        """
+        head = self.new_label("while_head")
+        end = self.new_label("while_end")
+        self.label(head)
+        cond = self.expr(node.test)
+        unconditional = cond.kind == "lit" and cond.value not in (0, 0.0, None)
+        if not unconditional:
+            if cond.kind != "spred":
+                raise CompileError("while 的条件必须是 uniform（标量）比较；"
+                                   "varying 条件请用 for + break")
+            self.emit(f"s_cbranch_scc0 {end}")
+        self.loop_stack.append((head, end))
+        for st in node.body:
+            self.stmt(st)
+        self.loop_stack.pop()
+        self.emit(f"s_branch {head}")
         self.label(end)
 
     # ---------------- ABI ----------------

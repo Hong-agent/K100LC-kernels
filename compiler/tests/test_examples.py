@@ -434,6 +434,95 @@ def mb(x: ptr[f32], y: ptr[f32], n: u32):
     print("取整族内建 + ubyte + 整数 max/min ok")
 
 
+def check_while(out_dir: pathlib.Path) -> None:
+    """回归：`while` 语句（uniform 条件）+ break / continue / `while 1`。
+
+    varying 条件会明确报错——那需要 loop-carried 的 exec 掩码约定，
+    还没定，宁可报错也不给错结果。
+    """
+    cases = [
+        ("uniform 计数",
+         """
+def wk(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        c = 0
+        v = x[i]
+        while c < 3:
+            v = v * 2.0
+            c = c + 1
+        y[i] = v
+""",
+         lambda a: a * 8.0),
+        ("while + break",
+         """
+def wk(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        c = 0
+        v = x[i]
+        while c < 100:
+            v = v + 1.0
+            c = c + 1
+            if c > 2:
+                break
+        y[i] = v
+""",
+         lambda a: a + 3.0),
+        ("while + continue",
+         """
+def wk(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        c = 0
+        v = 0.0
+        while c < 5:
+            c = c + 1
+            if c > 2:
+                continue
+            v = v + 1.0
+        y[i] = v
+""",
+         lambda a: np.full(len(a), 2.0, np.float32)),
+        ("while 1 + break",
+         """
+def wk(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        c = 0
+        while 1:
+            c = c + 1
+            if c > 4:
+                break
+        y[i] = f32(c)
+""",
+         lambda a: np.full(len(a), 5.0, np.float32)),
+    ]
+    n = 32
+    x = np.arange(n, dtype=np.float32)
+    for title, src, ref_fn in cases:
+        h = compile_source(src, out_dir, "wk")[0]
+        o = run_one(h, "wk",
+                    [{"buffer": "x"}, {"buffer": "y"},
+                     {"scalar": {"dtype": "u32", "value": n}}],
+                    {"x": {"dtype": "f32", "values": x.tolist()},
+                     "y": {"dtype": "f32", "values": [0.0] * n}},
+                    grid=n, workgroup=64)
+        got = np.array(o["y"], np.float32)
+        ref = np.asarray(ref_fn(x), np.float32)
+        d = float(np.abs(got - ref).max())
+        assert d < 1e-5, f"{title}: max_abs={d}"
+    try:
+        compile_source("def bad(x: ptr[f32], y: ptr[f32]):\n"
+                       "    c = 0\n"
+                       "    while x[0] > 1.0:\n"
+                       "        c = c + 1\n", out_dir, "bad")
+        raise AssertionError("varying 条件应当报错")
+    except Exception as exc:                       # noqa: BLE001
+        assert "uniform" in str(exc), exc
+    print("while（4 种写法）+ varying 条件报错 ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -447,6 +536,7 @@ def main() -> int:
     check_dsl_surface(out)
     check_int_cmp_and_divmod(out)
     check_math_builtins(out)
+    check_while(out)
     return 0
 
 

@@ -72,7 +72,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 | D4 | 新内建 | 进行中 | 已补 `min`/`max`（类型感知）、`floor`/`ceil`/`trunc`/`rint`/`fract`/`ubyte`；运算符补了 `^`、整数比较全表、2 的幂常量 `/` `%`；后续按需加 `frexp`/`mulhi`/`bfi` 等 |
 | D5 | 编译器自检 | 部分完成 | 已有 11 项（vadd/silu/axpy/loop/many_vars/long_expr/f32-比较/varying-ifelse/DSL 特性扫描/整数比较与除模/取整族内建）+ 动态启动；仍缺「生成 vs 参考」的批量回归集 |
 | D6 | 后端正确性扫描 | 已完成 | 「拿文档当规格逐项对账」这个方法连查出四类问题：f32 比较全挂、整数比较 8 个运算符挂、`^` 没接线、嵌套 varying if/else 算错。已扫完并固化：一元负号、`& \| ^ << >>`、增强赋值（含 `%=` 等）、两种 `range`、嵌套 for + break 只跳内层、uniform/varying if-else、多内核单文件、`u8/u16` 指针、`load16`/`s8`/`f16_to_f32`、f32/int 比较全表、2 的幂除模、取整族内建、`and`/`or`；不支持的特性（`while`、`return`、指针赋值、链式比较、一般除数）都给出明确报错 |
-| D7 | 循环语句 | 待办 | 只有 `for i in range(...)`；`while` 需要先定「条件必须 uniform」还是「按 lane 掩码退出」，后者要引入 loop-carried mask 约定 |
+| D7 | 循环语句 | 部分完成 | v1.7.4 补上 `while`（条件必须 uniform；`while 1` + break 也支持）；varying 条件的 `while` 还需要 loop-carried 掩码约定，仍待办 |
 
 ### E. 工程质量
 

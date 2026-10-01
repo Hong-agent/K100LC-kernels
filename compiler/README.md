@@ -38,7 +38,10 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
     `-max(-a,-b)`，编码表没有 f32 的 `v_min`），u32 走 `v_max_u32`/`v_min_u32`，
     s32 明确报错。**v1.7.1 之前不管什么类型都发 `v_max_f32`，整数会静默算错。**
 * 语句：赋值、`+= -= *= /=`、`if`（**varying 条件也支持 else**）、
-  `for i in range(a, b)`、`break`/`continue`
+  `for i in range(a, b)`、`while cond`、`break`/`continue`
+  * `while` 的条件必须是 **uniform（标量）比较**；`while 1:` 也支持
+    （无条件的无限循环，靠 `break` 退出）。varying 条件会明确报错——
+    那需要 loop-carried 的 exec 掩码约定，还没定。
 * 条件：比较、`and` / `or`（非短路——DSL 表达式无副作用，两侧都求值后把掩码
   在 vcc 里按位合并；uniform 与 varying 条件可以混用）
 * 内存：`buf[index]` load/store，下标可以是 varying 表达式
