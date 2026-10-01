@@ -376,6 +376,7 @@ class CodeGen:
         if isinstance(node, ast.BinOp):
             a, b = self.expr(node.left), self.expr(node.right)
             op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
+                  ast.Mod: "%",
                   ast.LShift: "<<", ast.RShift: ">>",
                   ast.BitAnd: "&", ast.BitOr: "|", ast.BitXor: "^"}.get(type(node.op))
             if op is None:
@@ -444,7 +445,23 @@ class CodeGen:
         dst = self.alloc_tmp_v()
         m = {"+": "v_add_u32_e32", "-": "v_sub_u32_e32", "*": "v_mul_lo_u32",
              "&": "v_and_b32_e32", "|": "v_or_b32_e32", "^": "v_xor_b32_e32"}
-        if op == "<<":
+        # 整数除 / 取模：只支持「2 的幂的常量除数」，用移位和掩码精确实现。
+        # 一般的整数除法要么上 magic 数（需要知道取值范围，不然会静默算错），
+        # 要么上完整除法序列，这里先不做——需要时用 `>>`/`&` 自己写。
+        if op in ("/", "%"):
+            d = int(b.value) if b.kind == "lit" else None
+            if d is None or d <= 0 or (d & (d - 1)) != 0:
+                raise CompileError(
+                    f"int {op} 只支持 2 的幂常量除数（收到 {b!r}）；"
+                    f"其它除数请用 `>>`/`&` 展开，或先在主机侧算好")
+            if ty == "s32":
+                raise CompileError("int 除/取模暂不支持 s32（负数移位语义不同）")
+            shift = d.bit_length() - 1
+            if op == "/":
+                self.emit(f"v_lshrrev_b32_e32 v{dst}, {shift}, v{av}")
+            else:
+                self.emit(f"v_and_b32_e32 v{dst}, {d - 1}, v{av}")
+        elif op == "<<":
             self.emit(f"v_lshlrev_b32_e32 v{dst}, v{bv}, v{av}")
         elif op == ">>":
             self.emit(f"{'v_ashrrev_i32_e32' if ty == 's32' else 'v_lshrrev_b32_e32'} "
@@ -460,12 +477,15 @@ class CodeGen:
         ty = "f32" if "f32" in (a.ty, b.ty) else ("s32" if "s32" in (a.ty, b.ty) else "u32")
         if self.is_uniform(a) and self.is_uniform(b) and ty != "f32":
             sa, sb = self.as_sreg(a), self.as_sreg(b)
+            if op in ("==", "!="):
+                # 两个补码下「相等」与符号无关，统一用 u32 形式
+                # （编码表里没有 s_cmp_eq_i32 / s_cmp_lg_i32）
+                mn = "s_cmp_eq_u32" if op == "==" else "s_cmp_lg_u32"
+                self.emit(f"{mn} s{sa}, s{sb}")
+                return Val("spred", None, "bool")
             base = "i32" if ty == "s32" else "u32"
             m = {"<": ("s_cmp_lt", False), "<=": ("s_cmp_ge", True),
-                 ">": ("s_cmp_gt", False), ">=": ("s_cmp_ge", False),
-                 "==": ("s_cmp_eq", False)}
-            if op == "!=":
-                raise CompileError("uniform != 暂不支持")
+                 ">": ("s_cmp_gt", False), ">=": ("s_cmp_ge", False)}
             mn, swap = m[op]
             self.emit(f"{mn}_{base} s{sb if swap else sa}, s{sa if swap else sb}")
             return Val("spred", None, "bool")
@@ -480,20 +500,32 @@ class CodeGen:
             self._cmp_f32(NodeOp=op, av=av, bv=bv)
             self._release(a, b)
             return Val("vpred", None, "bool")
-        else:
-            base = "i32" if ty == "s32" else "u32"
-            m = {"<": (f"v_cmp_lt_{base}_e32", False),
-                 "<=": (f"v_cmp_le_{base}_e32", False) if base == "u32"
-                       else (f"v_cmp_gt_{base}_e32", True),
-                 ">": (f"v_cmp_gt_{base}_e32", False),
-                 ">=": (f"v_cmp_le_{base}_e32", True) if base == "u32"
-                       else (f"v_cmp_ge_{base}_e32", False),
-                 "==": (f"v_cmp_eq_{base}_e32", False),
-                 "!=": (f"v_cmp_ne_{base}_e32", False)}
-        mn, swap = m[op]
-        self.emit(f"{mn} vcc, v{bv if swap else av}, v{av if swap else bv}")
+        self._cmp_int(ty, op, av, bv)
         self._release(a, b)
         return Val("vpred", None, "bool")
+
+    def _cmp_int(self, ty: str, op: str, av: int, bv: int) -> None:
+        """整数比较结果放进 vcc。
+
+        编码表里两个源都能是 VGPR 的整数比较只有三条：
+        `v_cmp_lt_u32_e64` / `v_cmp_gt_i32_e64` / `v_cmp_eq_u32_e32`。
+        其余运算符用「交换操作数 + 取反掩码」拼出来（`s_xor_b64 vcc, vcc, -1`）。
+        v1.6.4 之前 u32 的 `<= >= !=`、s32 的 `<= > >= == !=` 都编不过。
+        """
+        if op in ("==", "!="):
+            # 相等与符号无关，直接用 u32 形式
+            self.emit(f"v_cmp_eq_u32_e32 vcc, v{av}, v{bv}")
+            if op == "!=":
+                self.emit("s_xor_b64 vcc, vcc, -1")
+            return
+        if op in (">", "<="):           # a>b ⇔ b<a；a<=b ⇔ !(b<a)
+            av, bv = bv, av
+        if ty == "u32":
+            self.emit(f"v_cmp_lt_u32_e64 vcc, v{av}, v{bv}")
+        else:
+            self.emit(f"v_cmp_gt_i32_e64 vcc, v{bv}, v{av}")   # y>x ⇔ x<y
+        if op in ("<=", ">="):
+            self.emit("s_xor_b64 vcc, vcc, -1")
 
     def _cmp_f32(self, NodeOp: str, av: int, bv: int) -> None:
         """把 f32 比较结果放进 vcc（只用 `v_cmp_lt_f32_e64`）。
@@ -753,7 +785,11 @@ class CodeGen:
                 raise CompileError("只支持 Name 增强赋值")
             cur = self.env[t.id]
             rhs = self.expr(node.value)
-            op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}[type(node.op)]
+            op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
+                  ast.Mod: "%", ast.BitAnd: "&", ast.BitOr: "|",
+                  ast.BitXor: "^", ast.LShift: "<<", ast.RShift: ">>"}.get(type(node.op))
+            if op is None:
+                raise CompileError(f"增强赋值不支持 {type(node.op).__name__}")
             self._assign_name(t.id, self.binop(op, cur, rhs))
         elif isinstance(node, ast.If):
             self._if(node)

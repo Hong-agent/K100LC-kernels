@@ -290,6 +290,67 @@ def dsl(x: ptr[f32], y: ptr[f32], n: u32):
     print(f"DSL 特性扫描（{len(cases)} 项）ok")
 
 
+def check_int_cmp_and_divmod(out_dir: pathlib.Path) -> None:
+    """回归：整数比较 6 个运算符（u32 / s32）+ 2 的幂常数除与取模。
+
+    v1.6.4 之前编码表里两个源都能是 VGPR 的整数比较只有
+    `v_cmp_lt_u32_e64` / `v_cmp_gt_i32_e64` / `v_cmp_eq_u32_e32`，
+    所以 u32 的 `<= >= !=`、s32 的 `<= > >= == !=` 全都编不过。
+    """
+    n = 64
+    x = np.arange(n, dtype=np.float32)
+    xs = (np.arange(n, dtype=np.float32) - 20.0)     # 有负数，覆盖 s32
+    cmp_ops = {"<": np.less, "<=": np.less_equal, ">": np.greater,
+               ">=": np.greater_equal, "==": np.equal, "!=": np.not_equal}
+    for cast, vals, conv in (("u32", x, lambda a: a.astype(np.uint32)),
+                             ("s32", xs, lambda a: a.astype(np.int32))):
+        for op, ref_fn in cmp_ops.items():
+            src = f"""
+def icmp(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        if {cast}(x[i]) {op} {cast}(8.0):
+            y[i] = 1.0
+        else:
+            y[i] = 0.0
+"""
+            h = compile_source(src, out_dir, "icmp")[0]
+            o = run_one(h, "icmp",
+                        [{"buffer": "x"}, {"buffer": "y"},
+                         {"scalar": {"dtype": "u32", "value": n}}],
+                        {"x": {"dtype": "f32", "values": vals.tolist()},
+                         "y": {"dtype": "f32", "values": [0.0] * n}},
+                        grid=n, workgroup=64)
+            got = np.array(o["y"], np.float32)
+            ref = ref_fn(conv(vals), conv(np.full(n, 8.0, np.float32))).astype(np.float32)
+            assert np.array_equal(got, ref), f"{cast} {op} 不一致"
+    div_src = """
+def idiv(x: ptr[f32], y: ptr[f32], n: u32):
+    i = gid()
+    if i < n:
+        a = u32(x[i])
+        y[i] = f32((a / 4) + (a % 8) * 100)
+"""
+    h = compile_source(div_src, out_dir, "idiv")[0]
+    o = run_one(h, "idiv",
+                [{"buffer": "x"}, {"buffer": "y"},
+                 {"scalar": {"dtype": "u32", "value": n}}],
+                {"x": {"dtype": "f32", "values": x.tolist()},
+                 "y": {"dtype": "f32", "values": [0.0] * n}},
+                grid=n, workgroup=64)
+    got = np.array(o["y"], np.float32)
+    u = x.astype(np.uint32)
+    ref = ((u // 4) + (u % 8) * 100).astype(np.float32)
+    assert np.array_equal(got, ref), "int / 与 % 不一致"
+    try:
+        compile_source("def bad(x: ptr[f32], y: ptr[f32]):\n"
+                       "    y[0] = f32(u32(x[0]) % 3)\n", out_dir, "bad")
+        raise AssertionError("非 2 的幂除数应当报错")
+    except Exception as exc:                       # noqa: BLE001
+        assert "2 的幂" in str(exc), exc
+    print("整数比较（12 项）+ 2 的幂除/取模 ok")
+
+
 def main() -> int:
     out = pathlib.Path("/tmp/k100lc_compiler_test")
     check_vadd(out)
@@ -301,6 +362,7 @@ def main() -> int:
     check_f32_cmp(out)
     check_varying_else(out)
     check_dsl_surface(out)
+    check_int_cmp_and_divmod(out)
     return 0
 
 

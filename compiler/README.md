@@ -35,16 +35,22 @@ def silu(x: ptr[f32], y: ptr[f32], n: u32):
 * 语句：赋值、`+= -= *= /=`、`if`（**varying 条件也支持 else**）、
   `for i in range(a, b)`、`break`/`continue`
 * 内存：`buf[index]` load/store，下标可以是 varying 表达式
-* 运算符：`+ - * /`、`& | ^ <<`、比较 `== != < <= > >=`
+* 运算符：`+ - * /`、`& | ^ << >>`、比较 `== != < <= > >=`（整数与 f32 都支持）
+* 整数除 / 取模：**只支持 2 的幂的常量除数**（`a / 4`、`a % 8` 走移位/掩码，
+  精确）；一般除数会明确报错——要么自己用 `>>`/`&` 展开，要么在主机侧算好。
+  （magic 数除法需要知道取值范围，编译器不知道，宁可报错也不静默算错。）
 * `u8/u16` 指针、`load16`、`f16_to_f32`、`s8`（K-quant 解码所需）
 
 后端说明：
 
-* **f32 比较只有 e64 形式**能两个源都用 VGPR（e32 的第一个源在编码表里是
-  ssrc）。编译器统一发 `v_cmp_lt_f32_e64 vcc, x, y`，其余运算符靠交换操作数 /
+* **比较**：编码表里两个源都能是 VGPR 的形式很少——f32 只有
+  `v_cmp_lt_f32_e64`，整数只有 `v_cmp_lt_u32_e64` / `v_cmp_gt_i32_e64` /
+  `v_cmp_eq_u32_e32`。编译器统一用这几条，其余运算符靠交换操作数 /
   `s_xor_b64 vcc, vcc, -1` 取反拼出来；`==` 是「a≥b 且 b≥a」。
+  均等比较用 u32 形式（两个补码下相等与符号无关）。
   因此 `>=` / `<=` 是「不小于 / 不大于」，NaN 上与有序比较不同
-  （`compiler/tests/test_examples.py::check_f32_cmp` 覆盖 6 个运算符）。
+  （`check_f32_cmp` 覆盖 f32 的 6 个运算符，`check_int_cmp_and_divmod`
+  覆盖 u32/s32 各 6 个）。
 * `min(a,b)` 用 `-max(-a,-b)` 实现（编码表里没有 f32 的 `v_min`）。
 * varying 条件的 `if/else` 用 exec 掩码切换：`(old & vcc)` 跑 then、
   `(old & ~vcc)` 跑 else，最后 `s_mov_b64 exec, save` 复原。
