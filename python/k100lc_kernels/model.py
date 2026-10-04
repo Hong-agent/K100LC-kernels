@@ -43,7 +43,7 @@ __all__ = [
     "KVCache", "Sampler",
     "Attention", "FlashAttention", "TransformerLayer",
     "run_sequence", "gemv_f32", "ROWS8_MAX_K", "SPLIT_SOFTMAX_MIN_PAD",
-    "SPLITK_VTP",
+    "SPLITK_VTP", "RMSNORM_DEEP_MIN_DIM",
 ]
 
 
@@ -61,6 +61,12 @@ ROWS8_MAX_K = 512
 # 分块 softmax 的最小列数：再小的话 4 次启动的开销盖过收益（`softmax_vec_k`
 # 一行只要 1~2 轮，本身就很快）。下面用 `pad >= SPLIT_SOFTMAX_MIN_PAD` 判断。
 SPLIT_SOFTMAX_MIN_PAD = 2048
+
+# `rmsnorm_deep_k` 的下限：NB=16 的加深流水只在 dim 够大时才划算
+# （dim<2048 时主循环不跑、退化成逐条，反而比 rmsnorm_fast_k 慢；见
+# tools/gen_rmsnorm_deep.py 的实测表）。dim>=2048 时它把单次 RMSNorm 从
+# 26.5 us(dim=5120) 压到 13.0 us，数值与 rmsnorm_fast_k 逐位相同。
+RMSNORM_DEEP_MIN_DIM = 2048
 
 # `Attention` 的 `Vt·P` 走 split-K 版（见 `forward_device` 里那段注释）；
 # 关掉它就退回「一行一个 warp」，用来做对照基准。
@@ -488,7 +494,12 @@ class RMSNorm:
 
     def forward_device(self, x_dev: int, rows: int, sync: bool = False) -> int:
         out = self.ws.buffer(self.tag + ".out", rows * self.dim * 4)
-        if self.rt.has("rmsnorm_fast_k"):
+        if self.dim >= RMSNORM_DEEP_MIN_DIM and self.rt.has("rmsnorm_deep_k"):
+            # dim 大时单 workgroup 要读整行，NB=16 把访存往返从 dim/256 次
+            # 降到 dim/1024 次（本机 dim=5120 实测 26.5 → 13.0 us）。
+            self.rt.launch("rmsnorm_deep_k", rows, 64,
+                           [out, int(x_dev), self.w, self.dim, self.eps])
+        elif self.rt.has("rmsnorm_fast_k"):
             # 包里的 `rmsnorm_k` 是 HIP 编出来的：每个元素一条 load + 一条
             # `s_waitcnt vmcnt(0)`，dim=512 时是 8 次完整访存往返，单次实测
             # 15.1 us（投递地板 7.3）。自研的 `rmsnorm_fast_k` 把 load 按 4 个

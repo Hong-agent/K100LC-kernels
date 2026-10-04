@@ -302,6 +302,36 @@ def t_rmsnorm_fast(ctx: Ctx):
     return judge(worst, np.ones(1, np.float32))
 
 
+@case("norm", "rmsnorm_deep_k")
+def t_rmsnorm_deep(ctx: Ctx):
+    """`rmsnorm_deep_k`（load 16 个一批）：大 dim 正确性 + 与 fast 版逐位一致。
+
+    两者只有「一次发几条 load」不同，Σx² 的加法顺序不变，所以输出应当**逐位
+    相同**；这里两边都跑，并把差异也算进 worst。
+    """
+    rng = np.random.default_rng(82)
+    worst = 0.0
+    for rows, dim in ((1, 2048), (2, 5120), (1, 10240), (3, 64)):
+        x = (rng.standard_normal((rows, dim)) * 2.0).astype(np.float32)
+        w = rng.random(dim).astype(np.float32) + 0.5
+        eps = 1e-5
+        px, pw = ctx.buf(x), ctx.buf(w)
+        yd, yf = ctx.out(rows * dim), ctx.out(rows * dim)
+        ctx.launch("rmsnorm_deep_k", rows, 64,
+                   [yd, px, pw, dim, np.float32(eps)])
+        ctx.launch("rmsnorm_fast_k", rows, 64,
+                   [yf, px, pw, dim, np.float32(eps)])
+        ref = x / np.sqrt((x ** 2).mean(axis=1, keepdims=True) + eps) * w
+        gd = ctx.get(yd, rows * dim).reshape(rows, dim)
+        gf = ctx.get(yf, rows * dim).reshape(rows, dim)
+        worst = max(worst, float(np.abs(gd - gf).max()),
+                    float(np.abs(gd - ref).max()))
+        ref_scale = float(np.abs(ref).max())
+        if worst > 1e-4 + 1e-5 * max(1.0, ref_scale):
+            return judge(worst, ref)
+    return judge(worst, np.ones(1, np.float32))
+
+
 @case("norm", "rmsnorm_gated_k")
 def t_rmsnorm_gated(ctx: Ctx):
     rows, dim = 4, 256

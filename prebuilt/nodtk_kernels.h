@@ -2306,6 +2306,14 @@ static const RtArg k_args_133[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+    {28u, 4u, 0},   // by_value/global
+};
+
+static const RtArg k_args_134[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
+    {16u, 8u, 0},   // by_value/global
     {24u, 8u, 0},   // by_value/global
     {32u, 4u, 0},   // by_value/global
     {36u, 4u, 0},   // by_value/global
@@ -2326,20 +2334,12 @@ static const RtArg k_args_133[] = {
     {96u, 2u, 13},   // hidden_grid_dims
 };
 
-static const RtArg k_args_134[] = {
+static const RtArg k_args_135[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
     {24u, 4u, 0},   // by_value/global
     {28u, 4u, 0},   // by_value/global
-};
-
-static const RtArg k_args_135[] = {
-    {0u, 8u, 0},   // by_value/global
-    {8u, 8u, 0},   // by_value/global
-    {16u, 4u, 0},   // by_value/global
-    {20u, 4u, 0},   // by_value/global
-    {24u, 4u, 0},   // by_value/global
 };
 
 static const RtArg k_args_136[] = {
@@ -2353,6 +2353,14 @@ static const RtArg k_args_136[] = {
 static const RtArg k_args_137[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
+    {16u, 4u, 0},   // by_value/global
+    {20u, 4u, 0},   // by_value/global
+    {24u, 4u, 0},   // by_value/global
+};
+
+static const RtArg k_args_138[] = {
+    {0u, 8u, 0},   // by_value/global
+    {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
     {24u, 8u, 0},   // by_value/global
     {32u, 4u, 0},   // by_value/global
@@ -2374,7 +2382,7 @@ static const RtArg k_args_137[] = {
     {96u, 2u, 13},   // hidden_grid_dims
 };
 
-static const RtArg k_args_138[] = {
+static const RtArg k_args_139[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -2383,7 +2391,7 @@ static const RtArg k_args_138[] = {
     {32u, 4u, 0},   // by_value/global
 };
 
-static const RtArg k_args_139[] = {
+static const RtArg k_args_140[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 4u, 0},   // by_value/global
@@ -2407,7 +2415,7 @@ static const RtArg k_args_139[] = {
     {88u, 2u, 13},   // hidden_grid_dims
 };
 
-static const RtArg k_args_140[] = {
+static const RtArg k_args_141[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -2417,7 +2425,7 @@ static const RtArg k_args_140[] = {
     {40u, 4u, 0},   // by_value/global
 };
 
-static const RtArg k_args_141[] = {
+static const RtArg k_args_142[] = {
     {0u, 8u, 0},   // by_value/global
     {8u, 8u, 0},   // by_value/global
     {16u, 8u, 0},   // by_value/global
@@ -2577,15 +2585,16 @@ static const RtKernel k_table[] = {
     {"reduce_blocks_k", "reduce_blocks_k", 4u, k_args_129, 24u, 0u, 0u},
     {"reduce_max1_k", "reduce_max1_k", 3u, k_args_130, 24u, 256u, 0u},
     {"reduce_sum1_k", "reduce_sum1_k", 3u, k_args_131, 24u, 256u, 0u},
-    {"rmsnorm_fast_k", "rmsnorm_fast_k", 5u, k_args_132, 32u, 1024u, 0u},
-    {"rope_apply_k", "rope_apply_k", 21u, k_args_133, 104u, 0u, 0u},
-    {"router_top10_k", "router_top10_k", 5u, k_args_134, 32u, 0u, 0u},
-    {"softmax_k", "softmax_k", 5u, k_args_135, 32u, 1024u, 0u},
-    {"softmax_vec_k", "softmax_vec_k", 5u, k_args_136, 32u, 1024u, 0u},
-    {"split_qkv_k", "split_qkv_k", 21u, k_args_137, 104u, 0u, 0u},
-    {"topk_k", "topk_k", 6u, k_args_138, 40u, 0u, 0u},
-    {"vt_scatter_k", "vt_scatter_k", 21u, k_args_139, 96u, 16640u, 0u},
-    {"vt_scatter_v1_k", "vt_scatter_v1_k", 7u, k_args_140, 48u, 0u, 0u},
-    {"vt_scatter_v_k", "vt_scatter_v_k", 24u, k_args_141, 120u, 16640u, 0u},
+    {"rmsnorm_deep_k", "rmsnorm_deep_k", 5u, k_args_132, 32u, 1024u, 0u},
+    {"rmsnorm_fast_k", "rmsnorm_fast_k", 5u, k_args_133, 32u, 1024u, 0u},
+    {"rope_apply_k", "rope_apply_k", 21u, k_args_134, 104u, 0u, 0u},
+    {"router_top10_k", "router_top10_k", 5u, k_args_135, 32u, 0u, 0u},
+    {"softmax_k", "softmax_k", 5u, k_args_136, 32u, 1024u, 0u},
+    {"softmax_vec_k", "softmax_vec_k", 5u, k_args_137, 32u, 1024u, 0u},
+    {"split_qkv_k", "split_qkv_k", 21u, k_args_138, 104u, 0u, 0u},
+    {"topk_k", "topk_k", 6u, k_args_139, 40u, 0u, 0u},
+    {"vt_scatter_k", "vt_scatter_k", 21u, k_args_140, 96u, 16640u, 0u},
+    {"vt_scatter_v1_k", "vt_scatter_v1_k", 7u, k_args_141, 48u, 0u, 0u},
+    {"vt_scatter_v_k", "vt_scatter_v_k", 24u, k_args_142, 120u, 16640u, 0u},
 };
-static const int k_table_n = 142;
+static const int k_table_n = 143;

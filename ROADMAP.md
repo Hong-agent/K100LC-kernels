@@ -45,7 +45,7 @@ GEMV / 量化解码 / 融合点积），全部通过。
 | B1 | 全内核性能基线 | 部分完成 | `tools/bench_decode.py` 已覆盖解码全通路 + **`--layers N` 端到端权重流**（400 层：W4A8 33.1 ms/token、W4A4 29.3 ms/token）；还缺 attention / norm 等族的吞吐基线 |
 | B2 | 预填充 INT4 GEMM | 待办（需改内核） | `N=17408 K=5120` 实测：**M=128 20.2、M=256 30.7、M=512、38.1、M=1024 41.8 TMAC/s**（峰值 78）。大 M 稳定 ~54%，小 M 掉到 26%。原因：grid 只按 `(M/128)×(N/64)` 切，M=128 时**只有 272 个 workgroup**（120 CU 才 2.27 个/CU），延迟掩盖不住。**已否掉一个错误方案**：按 K 对半拆成两次 GEMM 并不能提高并行度（grid 与 K 无关），必须上 **split-K 内核**（部分和 + reduce）或把 BM 从 128 改小——两者都要改那个 500+ 行的手写 GEMM |
 | B3 | 解码注意力（长上下文） | 已完成 | v1.8.3 把三个瓶颈各修一处，`dim=128` 端到端 n_kv=1000/4096/16384/32768 → 106/121/157/218 us（改前 132/200/417/682 us，**2.66~3.13 倍**）。① `K·q`：新内核 `gemv_f32_rows8_k`（8 行/warp、行内 8 lane 归约、每 8 行只同步 3 次），nrows=16384 k=128 由 126 us（66 GB/s）降到 **19.5 us（429 GB/s）**，65536 行时 660 GB/s；k>512 时它更慢（k=1024 是 0.53×），所以按 `k ≤ 512` 分派。② softmax：`softmax_vec_k` 单 warp 扫三趟（16K 92 us）换成分块四件套 + 输出侧 `div_scalar_k`，未归一化的 exp 直接给 `Vt·P`，省掉一趟读写。③ `Vt·P`：新内核 `gemv_f32_rows8_split_k`（split-K，`(dim/8)·nsplit` 个 workgroup、每段只扫 pad/nsplit 列）129 us → **35.3 us**。踩过的坑：`block_exp_sum_k` 的 M 误传 by-value（读到指针低 32 位；softmax 平移不变所以常常「看着对」，只有那串位恰好是极大浮点时 exp 下溢 → L=0 → NaN），已改真指针并加 3 种子 × 30 尺寸扫描。早先否掉的方案（`attn_score_part` 替 K·q 只得 1.3×、`attn_pv_part` 替 Vt·P 更慢）仍留在记录里。仍待办：`fa_decode_k` 系列的语义、KV in int8/int4 的注意力 | v1.8.5 又把 `append` 的 V 转置搬到设备侧（`vt_scatter_k`，2.12 ms/次 → 0.134 ms/次），`Attention.append` / `append_device` 都不再走主机逐列转置。 v1.8.8 再进一步：新增**融合多头**内核 `flash_dec_part_k` + `flash_dec_comb_k`，不管几个头一次前向只有 2 个 launch；4~8 头比逐头老路快 **2.7~4.6 倍**（8×128/n_kv=1：343 → 74 us），1~2 头反而更慢（分块少时延迟暴露，结论是头 ≥4 用融合路）。 v1.9.4：`flash_dec_part_k` 三个相位改成只扫「真实存在的行」（`R_eff = min(R, n_kv - base)`）：n_kv=1 30.4 → 24.8 us、n_kv=30 30.4 → 24.1 us。**下一个长上下文瓶颈量出来了**：`flash_dec_comb_k` 每个 lane 串行扫 nsplit 个分块、每块 3 次访存（已经发完 3 条 load 再等一次，但仍是 O(nsplit) 轮往返）：nsplit=1/4/8 → 11 us，=16 → 15 us，=32 → 27 us，=64 → **50 us** ✗。一层 decoder 在 n_kv≈2048（nsplit=32）时 0.41 ms/token，其中 combine 占 ~7%。改法（试写过一版、因 LDS 槽位/广播地址写错出现 NaN，已回退，结论留在这里）：① M 用 lane 并行读 + LDS 树形归约；② w_s 算好写回 LDS；③ 输出维按 lane 分摊，只让 `po[s][d]` 走 global 并 4 宽批量发。
-| B4 | 融合算子 | 进行中 | v1.8.9 先有了**整层跑通**的基线：`TransformerLayer`（RMSNorm→QKV→RoPE→融合注意力→残差→RMSNorm→SwiGLU→残差）一次 sync 一个 token，dim=512/8头/ffn=1024 实测 **0.31 ms/token**，逐 token 对账 1.9e-07。瓶颈量出来了：一个 token 约 **16 次 launch**、相邻 launch 有依赖时每次约 19 us，而 10 MB 权重只要 ~17 us —— v1.9.1 把两个残差并进 GEMV（`*_acc_k`）、v1.9.2 把 SwiGLU 并进 down 投影（`gemv_f32_gated_acc_k`）：13 → **10 个内核**；v1.9.3 又修掉编译器「每条 store 都 `s_waitcnt vmcnt(0)`」的毛病、v1.9.4 让融合注意力只扫真实存在的行：设备侧 **0.31 → 0.20 ms/token**。下一步融 RMSNorm+量化、qkv+rope、注意力+输出投影 |
+| B4 | 融合算子 | 进行中 | v1.8.9 先有了**整层跑通**的基线：`TransformerLayer`（RMSNorm→QKV→RoPE→融合注意力→残差→RMSNorm→SwiGLU→残差）一次 sync 一个 token，dim=512/8头/ffn=1024 实测 **0.31 ms/token**，逐 token 对账 1.9e-07。瓶颈量出来了：一个 token 约 **16 次 launch**、相邻 launch 有依赖时每次约 19 us，而 10 MB 权重只要 ~17 us —— v1.9.1 把两个残差并进 GEMV（`*_acc_k`）、v1.9.2 把 SwiGLU 并进 down 投影（`gemv_f32_gated_acc_k`）：13 → **10 个内核**；v1.9.3 又修掉编译器「每条 store 都 `s_waitcnt vmcnt(0)`」的毛病、v1.9.4 让融合注意力只扫真实存在的行：设备侧 **0.31 → 0.20 ms/token**。下一步融 qkv+rope、注意力+输出投影（**RMSNorm+量化已实测否掉**，见下） |
 | B5 | MoE 专家并行度 | 待办 | 分桶路径已有 2.71×；继续做专家内并行 / 权重常驻 |
 | B6 | W4 GEMV 的 threads 约束 | 已完成 | 内核把「4 warp/组、1 行/warp」写死，非 256 会静默算错；`W4Runner` 现在直接拒绝 |
 | B7 | 融合点积内核带宽 | 已完成 | 11 个融合点积全部改成批量发载入（把每个载入后的 `s_waitcnt vmcnt(0)` 合并），MoE 口径提升 **1.39~5.36 倍**；`q6k_dot_k` 是最后一个（2.35×） |
@@ -104,6 +104,22 @@ part 30.2 us 里 7.3 是投递、comb 15.3 us 里 7.3 是投递。「层内几�
 地板，说明「纯派发」的那一类已经压无可压——再往下只能靠**少派发**（融合）或
 去掉 K 的跨步访问。下一个同类候选是 `rope_apply_k`（层里 9.9 us，比地板高
 2.8 us），但它只有 16 行 × 64 列，收益有限，优先级低于 B4 融合。
+
+**v1.9.12 修正了一个被「贴地板」掩盖的问题**：`rmsnorm_fast_k` 的 7.5 us 是
+**dim=512** 的数。它是单 workgroup 处理整行，每 lane 读 `dim/64` 个元素，完整
+访存往返 = `dim/256`——dim=5120（27B 的 hidden）时是 20 次，实测 **26.5 us**，
+根本不是地板。新内核 `rmsnorm_deep_k`（一趟发 16 条 load）把它压到 **13.0 us**，
+dim=10240 时 48.2 → 20.2 us，**输出与 fast 版逐位相同**（NB 不改加法顺序）。
+调用方按 `dim >= 2048` 分派（`model.RMSNORM_DEEP_MIN_DIM`）。
+教训：**小尺寸上量出的「已经贴地板」不能外推到大尺寸**，尤其对「单 workgroup
+串行扫整行」这一类内核。
+
+**「融 RMSNorm + 量化」已实测否掉**（`tools/gen_rmsnorm_quant.py`）：数值全对
+（q 逐位、sc 1e-7、asum 逐位），但 dim=5120 时 两次派发 38.0 us → 融合 79.7 us，
+dim=10240 是 59.1 → 151.0。`quant_act` 天然 `dim/128` 个 workgroup 并行
+（dim=5120 单独跑 9.5 us），而 RMSNorm 的行归约只能单 workgroup，融合把并行
+工作压成串行，亏得远超省下的 7.3 us 投递。**B4 下一步应该盯「并行形状相同」
+的算子对**（qkv+rope、kv_append_k+append_v、相邻的两个 l2norm），而不是这类。
 
 ### C. 特性覆盖
 

@@ -31,6 +31,8 @@ ARGS = [buffer_arg(0), buffer_arg(8), buffer_arg(16),
 KERNARG_SIZE = 32
 GROUP_SEGMENT = 1024          # 归约 256 B + 广播 4 B，跟着 layernorm_k 取 1024
 NB = 4                        # 一趟发几条 load（相邻 256 字节）
+LX = 12                       # x 的 load 目标寄存器基号（供加深流水时挪到高位）
+LW = 20                       # w 的 load 目标寄存器基号
 STRIDE = 64 * 4               # 相邻元素的字节间隔（64 个 float）
 
 
@@ -103,10 +105,10 @@ def gen_asm() -> str:
         "v_mov_b32_e32 v11, v5",
         "v_add_co_u32_e32 v10, vcc, v4, v9",
         "v_addc_co_u32_e32 v11, vcc, v11, v1, vcc",
-        *[f"global_load_dword v{12 + k}, v[10:11], off offset:{S * k}"
+        *[f"global_load_dword v{LX + k}, v[10:11], off offset:{S * k}"
           for k in range(NB)],
         "s_waitcnt vmcnt(0)",
-        *[f"v_fma_f32 v16, v{12 + k}, v{12 + k}, v16" for k in range(NB)],
+        *[f"v_fma_f32 v16, v{LX + k}, v{LX + k}, v16" for k in range(NB)],
         f"s_add_i32 s25, s25, {NB}",
         "s_branch L_sb",
         # 收尾：剩下不到 NB 个
@@ -119,9 +121,9 @@ def gen_asm() -> str:
         "v_mov_b32_e32 v11, v5",
         "v_add_co_u32_e32 v10, vcc, v4, v9",
         "v_addc_co_u32_e32 v11, vcc, v11, v1, vcc",
-        "global_load_dword v12, v[10:11], off",
+        f"global_load_dword v{LX}, v[10:11], off",
         "s_waitcnt vmcnt(0)",
-        "v_fma_f32 v16, v12, v12, v16",
+        f"v_fma_f32 v16, v{LX}, v{LX}, v16",
         "s_add_i32 s25, s25, 1",
         "s_branch L_s1",
         "L_s1_done:",
@@ -163,14 +165,14 @@ def gen_asm() -> str:
         "v_mov_b32_e32 v25, v7",
         "v_add_co_u32_e32 v24, vcc, v6, v9",
         "v_addc_co_u32_e32 v25, vcc, v25, v1, vcc",
-        *[f"global_load_dword v{12 + k}, v[10:11], off offset:{S * k}"
+        *[f"global_load_dword v{LX + k}, v[10:11], off offset:{S * k}"
           for k in range(NB)],
-        *[f"global_load_dword v{20 + k}, v[18:19], off offset:{S * k}"
+        *[f"global_load_dword v{LW + k}, v[18:19], off offset:{S * k}"
           for k in range(NB)],
         "s_waitcnt vmcnt(0)",
-        *[f"v_mul_f32_e32 v{12 + k}, v{12 + k}, v17" for k in range(NB)],
-        *[f"v_mul_f32_e32 v{12 + k}, v{12 + k}, v{20 + k}" for k in range(NB)],
-        *[f"global_store_dword v[24:25], v{12 + k}, off offset:{S * k}"
+        *[f"v_mul_f32_e32 v{LX + k}, v{LX + k}, v17" for k in range(NB)],
+        *[f"v_mul_f32_e32 v{LX + k}, v{LX + k}, v{LW + k}" for k in range(NB)],
+        *[f"global_store_dword v[24:25], v{LX + k}, off offset:{S * k}"
           for k in range(NB)],
         f"s_add_i32 s25, s25, {NB}",
         "s_branch L_nb",
@@ -189,12 +191,12 @@ def gen_asm() -> str:
         "v_mov_b32_e32 v25, v7",
         "v_add_co_u32_e32 v24, vcc, v6, v9",
         "v_addc_co_u32_e32 v25, vcc, v25, v1, vcc",
-        "global_load_dword v12, v[10:11], off",
-        "global_load_dword v20, v[18:19], off",
+        f"global_load_dword v{LX}, v[10:11], off",
+        f"global_load_dword v{LW}, v[18:19], off",
         "s_waitcnt vmcnt(0)",
-        "v_mul_f32_e32 v12, v12, v17",
-        "v_mul_f32_e32 v12, v12, v20",
-        "global_store_dword v[24:25], v12, off",
+        f"v_mul_f32_e32 v{LX}, v{LX}, v17",
+        f"v_mul_f32_e32 v{LX}, v{LX}, v{LW}",
+        f"global_store_dword v[24:25], v{LX}, off",
         "s_add_i32 s25, s25, 1",
         "s_branch L_n1",
         "L_n1_done:",
@@ -242,6 +244,24 @@ def main() -> int:
 
 
 KERNELS = [(NAME, gen_asm, ARGS, KERNARG_SIZE)]
+
+
+def make_variant(name: str, nb: int, lx: int, lw: int):
+    """按不同流水深度生成一个变体（返回 `build_native_kernels` 用的四元组）。
+
+    同一套算法，只改「一趟发几条 load」：本机实测 dim=5120/10240 时，
+    把 NB 从 4 加到 16 能把单次 RMSNorm 从 26.5/48.2 us 压到 13.0/20.2 us
+    （单 workgroup 里 20 次访存往返降到 5 次），而**数值逐位不变**——
+    NB 只影响一次发几条 load，Σx² 的加法顺序不变。dim 小（≤1024，比如
+    head_dim）时主循环本来就不跑，两种深度等价，所以调用方按 dim 分派即可。
+    """
+    global NAME, NB, LX, LW
+    saved = (NAME, NB, LX, LW)
+    NAME, NB, LX, LW = name, nb, lx, lw
+    try:
+        return (name, gen_asm(), ARGS, KERNARG_SIZE)
+    finally:
+        NAME, NB, LX, LW = saved
 
 if __name__ == "__main__":
     raise SystemExit(main())

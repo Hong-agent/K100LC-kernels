@@ -2,7 +2,7 @@
 
 本文件由 `tools/gen_kernel_docs.py` 从 [`python/k100lc_kernels/catalog.json`](../python/k100lc_kernels/catalog.json) 自动生成，请勿手工修改。
 
-预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **142 个内核**。
+预编译 HSACO：`prebuilt/k100lc_kernels.hsaco`；共 **143 个内核**。
 
 调用方法、grid 语义和完整示例先看 [`docs/KERNEL_CALLING.md`](KERNEL_CALLING.md)。本页只回答「某个 lookup 到底要传哪些参数」。
 
@@ -15,11 +15,11 @@
 | 融合点积（原生量化块 × 激活） | 12 |
 | 量化解码 | 12 |
 | GEMV / GEMM | 8 |
-| Transformer 常用算子 | 25 |
+| Transformer 常用算子 | 26 |
 | Attention / KV / 视觉塔 | 19 |
 | 序列模型 / 卷积 | 6 |
 | 其他 | 10 |
-| **合计** | **142** |
+| **合计** | **143** |
 
 ## 速查表
 
@@ -146,6 +146,7 @@
 | `reduce_blocks_k` | `buf:0:8 buf:8:8 val:16:4 val:20:4` | 24 | 0 | 0 |
 | `reduce_max1_k` | `buf:0:8 buf:8:8 val:16:4` | 24 | 256 | 0 |
 | `reduce_sum1_k` | `buf:0:8 buf:8:8 val:16:4` | 24 | 256 | 0 |
+| `rmsnorm_deep_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4` | 32 | 1024 | 0 |
 | `rmsnorm_fast_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4` | 32 | 1024 | 0 |
 | `rmsnorm_gated_k` | `buf:0:8 buf:8:8 buf:16:8 buf:24:8 val:32:4 val:36:4` | 296 | 128 | 0 |
 | `rmsnorm_k` | `buf:0:8 buf:8:8 buf:16:8 val:24:4 val:28:4 val:32:4` | 296 | 128 | 0 |
@@ -2361,6 +2362,20 @@
 | 3 | 24 | 4 | `by_value` | 调用方 |
 | 4 | 28 | 4 | `by_value` | 调用方 |
 | 5 | 32 | 4 | `by_value` | 调用方 |
+
+#### `rmsnorm_deep_k`
+
+- mangled 符号：`rmsnorm_deep_k`
+- 签名：`rmsnorm_deep_k`
+- kernarg：32 B，LDS：1024 B，private：0 B
+
+| # | offset | size | kind | 由谁填 |
+|---:|---:|---:|---|---|
+| 0 | 0 | 8 | `global_buffer` | 调用方 |
+| 1 | 8 | 8 | `global_buffer` | 调用方 |
+| 2 | 16 | 8 | `global_buffer` | 调用方 |
+| 3 | 24 | 4 | `by_value` | 调用方 |
+| 4 | 28 | 4 | `by_value` | 调用方 |
 
 #### `rmsnorm_fast_k`
 

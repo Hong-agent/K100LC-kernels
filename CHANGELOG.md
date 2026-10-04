@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.9.12
+
+**新内核 `rmsnorm_deep_k`：大 dim 的 RMSNorm 26.5 → 13.0 us（2 倍），数值逐位不变。**
+
+`rmsnorm_fast_k` 把 load 按 4 个一批发；但它是**单 workgroup** 处理整行的：
+每 lane 要读 `dim/64` 个元素，于是完整访存往返次数 = `dim/256`。dim=512 时只要
+2 次往返（所以当初实测 7.5 us 已经贴着投递地板），**dim=5120 时是 20 次**——
+单 workgroup 的访存延迟全暴露，实测 26.5 us。
+
+`rmsnorm_deep_k` 是同一套算法、同一份 ABI，只把一趟的 load 加宽到 **16 条**
+（往返降到 `dim/1024`）。NB 只影响一次发几条 load，**Σx² 的加法顺序不变**，
+所以输出与 `rmsnorm_fast_k` 逐位相同（自检里两边都跑、直接比位）。
+
+| dim | `rmsnorm_fast_k` | `rmsnorm_deep_k` |
+|---|---:|---:|
+| 128 | ~7.5 us | ~7.5 us（主循环不跑，两者等价） |
+| 512 | 10.4 us | 18.2 us（**更慢**，退化成逐条） |
+| 2560 | 15.5 us | 16.3 us |
+| 5120 | 26.5 us | **13.0 us** |
+| 10240 | 48.2 us | **20.2 us** |
+
+dim 小的时候大 NB 反而更慢（主循环进不去、收尾退化成逐条），所以
+`model.RMSNorm` 按 `dim >= RMSNORM_DEEP_MIN_DIM (2048)` 分派：大 dim 走 deep、
+小 dim 仍走 fast。消费方（FASTASM）的两种用法正好落在两端——整层 hidden
+（~5120）走 deep，q/k norm 的 `dim = head_dim`（128）两者等价。
+内核包 142 → 143。
+
+### 否掉的方案：把 RMSNorm 与 W4A8 激活量化融合成一颗内核
+
+参考项目（stratum/MI50）的思路是「norm 的同时输出量化图像、中间 f32 不落地」。
+照此写了 `tools/gen_rmsnorm_quant.py`（`rmsnorm_quant_k`），数值对账**全对**
+（q 逐位一致，sc ~1e-7，asum 逐位），但**实测慢一倍**：
+
+| dim（rows=1） | `rmsnorm_fast_k` + `quant_act`（两次派发） | `rmsnorm_quant_k`（一次派发） |
+|---|---:|---:|
+| 2560 | 23.6 us | 43.4 us |
+| 5120 | 38.0 us | 79.7 us |
+| 10240 | 59.1 us | 151.0 us |
+
+原因不是省不省那一次 7.3 us 投递，而是**并行度**：`quant_act` 天然是 `dim/128`
+个 workgroup 并行（dim=5120 时 40 个，单独跑只要 9.5 us），而 RMSNorm 的行归约
+只能单 workgroup（`rs` 要整行才能算）。融合把 40 个 workgroup 的活压到 1 个上
+串行，归约与访存延迟全暴露，多花的时间远超省下的一次派发。
+**结论：这对算子在单行解码下不该融合**；`rmsnorm_quant_k` 留在 `tools/` 里
+作为可复现的证据，不进发货内核包。
+
 ## 1.9.11
 
 **新内核 `vt_scatter_v1_k`：单行 KV 追加 25.3 → 7.5 us（3.4 倍），一层
