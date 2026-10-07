@@ -14,6 +14,7 @@
 | [`docs/KERNELS.md`](docs/KERNELS.md) | 143 个内核的逐参数总表（从 catalog 自动生成） |
 | [`docs/MODEL_RUNTIME.md`](docs/MODEL_RUNTIME.md) | **模型级 API**：线性层 / RMSNorm / MLP / MoE / KV / 采样与效率实践 |
 | [`docs/ABI.md`](docs/ABI.md) | kernarg 布局、动态启动、2D grid 限制 |
+| [`docs/GOTCHAS.md`](docs/GOTCHAS.md) | **真机实测的坑**：符号重名、`rsqrt.approx.f32`、`host_pool` 的选择、读回可见性 |
 | [`docs/INT4.md`](docs/INT4.md) | compressed-tensors INT4（W4A16）格式与内核用法 |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | K100_LC 算力 / 带宽实测与复现方法 |
 

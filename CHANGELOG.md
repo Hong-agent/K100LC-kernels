@@ -1,5 +1,22 @@
 # Changelog
 
+## 未发布
+
+**`merge_hsacos.py` 现在拒绝同名内核；新增 `docs/GOTCHAS.md`。**
+
+合并多份 HSACO 时，同名符号会在 `.dynsym` 里**后者覆盖前者**，而两份代码都留在
+`.text`：按名字查找拿到的是最后写入的那份，可能根本不是调用方以为的那个内核。
+真机上这类冲突的表现是**「改了源码没反应」**——把内核输出改成常量也照样返回旧
+值，很容易误判成代码生成或算错。现在 `merge_hsacos.py` 会列出冲突并返回 1，
+确有覆盖意图时用 `--allow-duplicates` 放行。
+（`prebuilt/k100lc_kernels.hsaco` + `prebuilt/k100lc_base.hsaco` 就会命中。）
+
+`docs/GOTCHAS.md` 收录本轮在真机上复现过的四条：符号重名、`rsqrt.approx.f32`
+在 gfx926 上每 16 个 lane 坏 4 个（源码改 `1.0f/sqrtf` 可规避）、`host_pool`
+必须取自 CPU agent 且要 `hsa_amd_agents_allow_access`（否则 D2H 会读回上一次的
+数据；`hsa_amd_memory_lock` 在这个 runtime 上会挂死）、以及读回时应当无效化
+而不是写回缓存行。
+
 ## 1.9.12
 
 **新内核 `rmsnorm_deep_k`：大 dim 的 RMSNorm 26.5 → 13.0 us（2 倍），数值逐位不变。**

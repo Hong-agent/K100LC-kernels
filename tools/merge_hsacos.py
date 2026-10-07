@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import struct
+import sys
 from pathlib import Path
 
 import msgpack
@@ -84,12 +85,33 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("inputs", nargs="+", type=Path)
     ap.add_argument("-o", "--output", type=Path, required=True)
+    ap.add_argument("--allow-duplicates", action="store_true",
+                    help="允许同名内核（后者覆盖符号；默认拒绝，见下面的注释）")
     args = ap.parse_args()
     kernels = []
+    # 同名内核合并后会得到**一个** dynsym 条目（后者覆盖前者），但两份代码都留在
+    # .text 里：调用方拿到的名字指向的不是它以为的那份代码。这类冲突在真机上表现
+    # 为「改了源码没反应」——实测在另一套移植运行时上，把内核输出改成常量也照样
+    # 返回旧结果，最后才发现目录里有一份同名的旧 HSACO。
+    origin: dict[str, str] = {}
+    duplicates: list[tuple[str, str, str]] = []
     for path in args.inputs:
-        kernels.extend(parse_kernels(path))
+        for k in parse_kernels(path):
+            if k["name"] in origin:
+                duplicates.append((k["name"], origin[k["name"]], str(path)))
+            else:
+                origin[k["name"]] = str(path)
+            kernels.append(k)
+    if duplicates and not args.allow_duplicates:
+        for name, first, second in duplicates:
+            print(f"重复内核名：{name}\n  先出现：{first}\n  又出现：{second}", file=sys.stderr)
+        print(f"共 {len(duplicates)} 处冲突；确有同名覆盖的意图时加 --allow-duplicates。",
+              file=sys.stderr)
+        raise SystemExit(1)
     args.output.write_bytes(build_elf(kernels))
     print(f"wrote {args.output}: merged {len(kernels)} kernels")
+    if duplicates:
+        print(f"警告：{len(duplicates)} 处同名内核已按顺序覆盖", file=sys.stderr)
     for k in kernels:
         print(f"  {k['name']}: text={len(k['code'])} kernarg={k['kernarg_size']}")
 
